@@ -25,6 +25,11 @@ from .youtube import (  # Youtube is moved to the top to improve performance
     YoutubeConsentRedirectIE,
 )
 
+from .yoturkish import (
+    YoTurkishEpisodeIE,
+    YoTurkishVideoIE,
+)
+
 # isort: on
 
 from .abc import (
