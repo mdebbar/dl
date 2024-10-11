@@ -25,6 +25,11 @@ from .youtube import (  # Youtube is moved to the top to improve performance
     YoutubeConsentRedirectIE,
 )
 
+from .isk import (
+    IskEpisodeIE,
+    IskSerieIE,
+)
+
 # isort: on
 
 from .abc import (
