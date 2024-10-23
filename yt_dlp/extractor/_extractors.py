@@ -30,6 +30,12 @@ from .isk import (
     IskSerieIE,
 )
 
+from .aradrama import (
+    AradramaEpisodeIE,
+    AradramaEpisodeListIE,
+    AradramaSerieIE,
+)
+
 # isort: on
 
 from .abc import (
