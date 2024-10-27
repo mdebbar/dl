@@ -25,7 +25,7 @@ _HOSTS = '|'.join([
 _DOMAIN_RE = rf'https?://(?:\w{{1,4}}\.)?(?:{_HOSTS})\.(?:\w{{2,4}})'
 
 _SERIE_ID_RE = r'serie-(?P<series>[\w-]+)'
-_EPISODE_ID_RE = r'serie-(?P<series>[\w-]+?)-season-(?P<season>\d+)-episode-(?P<episode>\d+)'
+_EPISODE_ID_RE = r'serie-(?P<series>[\w-]+?)-season-(?P<season>\d+)[\w\d-]*?-episode-(?P<episode>\d+)'
 
 _SERIE_URL_RE = rf'{_DOMAIN_RE}/watch/tvshows/(?P<id>{_SERIE_ID_RE})'
 _EPISODE_URL_RE = rf'{_DOMAIN_RE}/watch/episodes/(?P<id>{_EPISODE_ID_RE})'

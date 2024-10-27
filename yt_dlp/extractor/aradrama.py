@@ -129,7 +129,7 @@ class AradramaEpisodeListIE(AradramaBaseIE):
         title_htmls = get_elements_by_class('post-title', webpage)
 
         episode_urls = [
-            re.search(rf'href=([\'"])(?P<url>{_EPISODE_URL_RE}/?)\1', title_html).group('url')
+            re.search(r'href=([\'"])(?P<url>.*?)\1', title_html).group('url')
             for title_html in title_htmls
         ]
 
