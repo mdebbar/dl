@@ -13,6 +13,7 @@ from ..utils import (
     get_element_html_by_class,
     get_element_html_by_id,
     get_element_text_and_html_by_tag,
+    get_elements_html_by_class,
     urlencode_postdata,
 )
 
@@ -38,6 +39,9 @@ _MAIN_IFRAME_URL_RE = _DOMAIN_RE + r'/embed/.+'
 # miravd.com
 # mwdy.cc
 _EMBEDDED_IFRAME_URL_RE = r'https?://[^/]+/embed-[\w-]+\.html'
+
+# إعلان
+_TRAILER_RE = r'[إا]علان'
 
 
 class IskBaseIE(InfoExtractor):
@@ -120,9 +124,16 @@ class IskBaseIE(InfoExtractor):
 
         return next_url, next_page
 
+    def _is_trailer(self, html):
+        server_name_elements = get_elements_html_by_class('server_name', html)
+        return any(re.search(_TRAILER_RE, element) for element in server_name_elements)
+
     def _handle_watch_page(self, video_id, url, html):
         # The watch page has an iframe (let's call it MAIN) that loads another
         # iframe inside of it (let's call this one EMBEDDED)
+
+        if (self._is_trailer(html)):
+            return None
 
         _, main_iframe = get_element_text_and_html_by_tag('iframe', html)
         main_iframe_src = extract_attributes(main_iframe)['src']
@@ -325,6 +336,9 @@ class IskEpisodeIE(IskBaseIE):
         self.debug('[EPISODE] next page', next_page)
 
         m3u8_url = self._find_m3u8_url(video_id, next_url, next_page)
+
+        if (m3u8_url is None):
+            raise ExtractorError('Not a real episode: ' + url)
 
         self.debug('m3u8 url', m3u8_url)
 
