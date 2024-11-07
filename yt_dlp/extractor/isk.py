@@ -13,7 +13,6 @@ from ..utils import (
     get_element_html_by_class,
     get_element_html_by_id,
     get_element_text_and_html_by_tag,
-    get_elements_html_by_class,
     urlencode_postdata,
 )
 
@@ -40,8 +39,8 @@ _MAIN_IFRAME_URL_RE = _DOMAIN_RE + r'/embed/.+'
 # mwdy.cc
 _EMBEDDED_IFRAME_URL_RE = r'https?://[^/]+/embed-[\w-]+\.html'
 
-# إعلان
-_TRAILER_RE = r'[إا]علان'
+# 20 minutes
+_MIN_DURATION_SECONDS = 20 * 60
 
 
 class IskBaseIE(InfoExtractor):
@@ -124,16 +123,9 @@ class IskBaseIE(InfoExtractor):
 
         return next_url, next_page
 
-    def _is_trailer(self, html):
-        server_name_elements = get_elements_html_by_class('server_name', html)
-        return any(re.search(_TRAILER_RE, element) for element in server_name_elements)
-
     def _handle_watch_page(self, video_id, url, html):
         # The watch page has an iframe (let's call it MAIN) that loads another
         # iframe inside of it (let's call this one EMBEDDED)
-
-        if (self._is_trailer(html)):
-            return None
 
         _, main_iframe = get_element_text_and_html_by_tag('iframe', html)
         main_iframe_src = extract_attributes(main_iframe)['src']
@@ -340,6 +332,13 @@ class IskEpisodeIE(IskBaseIE):
 
         self.debug('m3u8 formats', m3u8_formats)
 
+        video_duration = self._extract_m3u8_vod_duration(m3u8_formats[0]['url'], video_id)
+
+        self.debug('video duration', _duration_text(video_duration))
+
+        if video_duration < _MIN_DURATION_SECONDS:
+            raise ExtractorError(f'Video duration {_duration_text(video_duration)} is too short')
+
         return {
             'id': video_id,
             'title': title,
@@ -371,6 +370,14 @@ class IskSerieIE(IskBaseIE):
             entries=[self.url_result(url, ie=IskEpisodeIE) for url in episode_urls],
         )
 
+
+def _duration_text(duration):
+    result = ''
+    while duration > 0:
+        current = str(duration % 60).zfill(2)
+        result = f':{current}{result}'
+        duration //= 60
+    return result[1:]
 
 # TODO: Add support for Movie pages too. It should be straightforward since
 #       most of the complexity is implemented already.
