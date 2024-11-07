@@ -184,18 +184,12 @@ class IskBaseIE(InfoExtractor):
         img_src = self._by_tag_attribute('img', 'src', vplayer_div)
         cdn_domain = urllib.parse.urlparse(img_src).netloc
 
-        path_parts_re = r'''(?x)
-        \|(?P<ext>m3u8)
-        .*?
-        \|(?P<channel>master)
-        .*?
-        \|(?P<operation>urlset)
-        \|(?P<token>\w+)
-        .*?
-        \|(?P<encoding>hls)
-        \|
-        '''
-        ext, channel, operation, token, encoding = re.search(path_parts_re, html).groups()
+        relevant_parts_re = r'\|m3u8\|.+?\|hls\|'
+        relevant_parts = re.search(relevant_parts_re, html).group().split('|')
+        relevant_parts = list(filter(lambda p: len(p) > 0, relevant_parts))
+        self.debug('RELEVANT PARTS', '|'.join(relevant_parts))
+
+        ext, channel, operation, token, encoding = relevant_parts
         path = f'{encoding}/,{token},.{operation}/{channel}.{ext}'
 
         return f'https://{cdn_domain}/{path}'
