@@ -323,9 +323,6 @@ class IskEpisodeIE(IskBaseIE):
 
         m3u8_url = self._find_m3u8_url(video_id, next_url, next_page)
 
-        if (m3u8_url is None):
-            raise ExtractorError('Not a real episode: ' + url)
-
         self.debug('m3u8 url', m3u8_url)
 
         m3u8_formats = self._extract_m3u8_formats(m3u8_url, video_id)
@@ -337,7 +334,7 @@ class IskEpisodeIE(IskBaseIE):
         self.debug('video duration', _duration_text(video_duration))
 
         if video_duration < _MIN_DURATION_SECONDS:
-            raise ExtractorError(f'Video duration {_duration_text(video_duration)} is too short')
+            raise ExtractorError(f'Video duration {_duration_text(video_duration)} is too short', expected=True)
 
         return {
             'id': video_id,
