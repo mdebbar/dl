@@ -38,7 +38,7 @@ class AradramaBaseIE(InfoExtractor):
             data=data,
         )
 
-    def _find_supported_cdns(self, cdn_links):
+    def _find_supported_cdns(self, cdn_links, video_id):
         supported_cdns = [
             'ok.ru',
             'vk.com',
@@ -56,6 +56,12 @@ class AradramaBaseIE(InfoExtractor):
             # 'mixdrop',
             # 'vadbam',
             # 'uqload',
+
+            # EASY, HAS DIRECT MP4 LINK:
+            # 'vdbtm',
+
+            # EASY, HAS DIRECT M3U8 LINK:
+            # '1vid1shar',
         ]
 
         found = False
@@ -66,10 +72,10 @@ class AradramaBaseIE(InfoExtractor):
                     yield link
 
         if not found:
-            raise ExtractorError('Could not find a link to a supported CDN')
+            raise ExtractorError('Could not find a link to a supported CDN', video_id=video_id)
 
     def _try_server_links(self, server_links, video_id, referer):
-        for iframe_url in self._find_supported_cdns(server_links):
+        for iframe_url in self._find_supported_cdns(server_links, video_id):
             iframe_html = self._download_with_referer(
                 iframe_url,
                 video_id,
