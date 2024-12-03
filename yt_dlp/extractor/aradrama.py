@@ -11,6 +11,8 @@ from ..utils import (
     get_element_by_class,
     get_elements_by_class,
     get_elements_html_by_class,
+    traverse_obj,
+    unescapeHTML,
 )
 
 # الحلقة
@@ -36,19 +38,83 @@ class AradramaBaseIE(InfoExtractor):
             data=data,
         )
 
-    def _find_supported_cdn(self, cdn_links):
+    def _find_supported_cdns(self, cdn_links):
         supported_cdns = [
-            'luluvdo',
+            'ok.ru',
+            'vk.com',
             'rubyvid',
             'vidmoly',
+
+            # Not supported:
+            # 'luluvdo',
+            # 'vidhidepre',
+            # 'dood.li',
+            # 'swdyu.com',
+            # 'filemoon',
+            # 'streamtape',
+            # 'upstream.to',
+            # 'mixdrop',
+            # 'vadbam',
+            # 'uqload',
         ]
 
+        found = False
         for supported in supported_cdns:
             for link in cdn_links:
                 if supported in link:
-                    return link
+                    found = True
+                    yield link
 
-        raise ExtractorError('Could not find a link to a supported CDN')
+        if not found:
+            raise ExtractorError('Could not find a link to a supported CDN')
+
+    def _try_server_links(self, server_links, video_id, referer):
+        for iframe_url in self._find_supported_cdns(server_links):
+            iframe_html = self._download_with_referer(
+                iframe_url,
+                video_id,
+                f'Downloading video iframe {iframe_url}',
+                referer,
+            )
+
+            self.debug('IFRAME CDN URL', iframe_url)
+            self.debug('IFRAME HTML', iframe_html)
+
+            # rubyvid
+            # vidmoly
+            mobj = re.search(r'file:\s*([\'"])(?P<url>https?://.*?\.m3u8[^\'"]*)\1', iframe_html)
+            if mobj:
+                m3u8_url = mobj.group('url')
+                return m3u8_url, iframe_url
+
+            # ok.ru
+            mobj = re.search(r'data-options="(?P<dataoptions>[^"]+)"', iframe_html)
+            if mobj:
+                try:
+                    data_options = self._parse_json(unescapeHTML(mobj.group('dataoptions')), video_id)
+                    metadata = self._parse_json(data_options['flashvars']['metadata'], video_id)
+                    m3u8_url = metadata['hlsManifestUrl']
+                    return m3u8_url, iframe_url
+                except Exception:
+                    pass
+
+            # vk.com
+            try:
+                player_params = self._search_json(
+                    r'playerParams\s*=',
+                    iframe_html,
+                    'playerParams',
+                    video_id,
+                )
+                m3u8_url = traverse_obj(player_params, ('params', 0, 'hls'))
+                if m3u8_url:
+                    return m3u8_url, iframe_url
+            except Exception:
+                pass
+
+            self.report_warning(f'Could not find m3u8 URL in iframe {iframe_url}', video_id=video_id)
+
+        raise ExtractorError('Could not find an m3u8 URL in any of the server links', video_id=video_id)
 
     def debug(self, name, info):
         self.write_debug('\n')
@@ -64,7 +130,9 @@ class AradramaEpisodeIE(AradramaBaseIE):
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
-        webpage = self._download_webpage(url, video_id)
+        video_id_readable = urllib.parse.unquote(video_id)
+
+        webpage = self._download_webpage(url, video_id_readable)
 
         self.debug('INITIAL WEB PAGE', webpage)
 
@@ -85,22 +153,11 @@ class AradramaEpisodeIE(AradramaBaseIE):
 
         self.debug('SERVER LINKS', server_links)
 
-        iframe_url = self._find_supported_cdn(server_links)
-        iframe_html = self._download_webpage(
-            iframe_url,
-            video_id,
-            'Downloading video iframe',
-        )
-
-        self.debug('IFRAME URL', iframe_url)
-        self.debug('IFRAME HTML', iframe_html)
-
-        mobj = re.search(r'file:\s*([\'"])(?P<url>https?://.*?\.m3u8[^\'"]*)\1', iframe_html)
-        m3u8_url = mobj.group('url')
+        m3u8_url, iframe_url = self._try_server_links(server_links, video_id_readable, url)
 
         self.debug('m3u8 URL', m3u8_url)
 
-        m3u8_formats = self._extract_m3u8_formats(m3u8_url, video_id, headers={'Referer': iframe_url})
+        m3u8_formats = self._extract_m3u8_formats(m3u8_url, video_id_readable, headers={'Referer': iframe_url})
         m3u8_formats_with_referer = [
             {**format_dict, 'headers': {'Referer': iframe_url}}
             for format_dict in m3u8_formats
@@ -109,6 +166,7 @@ class AradramaEpisodeIE(AradramaBaseIE):
         self.debug('m3u8 formats', m3u8_formats_with_referer)
 
         return {
+            # TODO: Use `video_id_readable` instead (requires updating the archive)
             'id': video_id,
             'title': title,
             'series': series,
@@ -122,7 +180,8 @@ class AradramaEpisodeListIE(AradramaBaseIE):
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
-        webpage = self._download_webpage(url, video_id)
+        video_id_readable = urllib.parse.unquote(video_id)
+        webpage = self._download_webpage(url, video_id_readable)
 
         self.debug('INITIAL WEB PAGE', webpage)
 
@@ -146,7 +205,8 @@ class AradramaSerieIE(AradramaBaseIE):
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
-        webpage = self._download_webpage(url, video_id)
+        video_id_readable = urllib.parse.unquote(video_id)
+        webpage = self._download_webpage(url, video_id_readable)
 
         self.debug('INITIAL WEB PAGE', webpage)
 
