@@ -129,10 +129,9 @@ class AradramaEpisodeIE(AradramaBaseIE):
     _VALID_URL = _EPISODE_URL_RE
 
     def _real_extract(self, url):
-        video_id = self._match_id(url)
-        video_id_readable = urllib.parse.unquote(video_id)
+        video_id = urllib.parse.unquote(self._match_id(url))
 
-        webpage = self._download_webpage(url, video_id_readable)
+        webpage = self._download_webpage(url, video_id)
 
         self.debug('INITIAL WEB PAGE', webpage)
 
@@ -153,11 +152,11 @@ class AradramaEpisodeIE(AradramaBaseIE):
 
         self.debug('SERVER LINKS', server_links)
 
-        m3u8_url, iframe_url = self._try_server_links(server_links, video_id_readable, url)
+        m3u8_url, iframe_url = self._try_server_links(server_links, video_id, url)
 
         self.debug('m3u8 URL', m3u8_url)
 
-        m3u8_formats = self._extract_m3u8_formats(m3u8_url, video_id_readable, headers={'Referer': iframe_url})
+        m3u8_formats = self._extract_m3u8_formats(m3u8_url, video_id, headers={'Referer': iframe_url})
         m3u8_formats_with_referer = [
             {**format_dict, 'headers': {'Referer': iframe_url}}
             for format_dict in m3u8_formats
@@ -166,7 +165,6 @@ class AradramaEpisodeIE(AradramaBaseIE):
         self.debug('m3u8 formats', m3u8_formats_with_referer)
 
         return {
-            # TODO: Use `video_id_readable` instead (requires updating the archive)
             'id': video_id,
             'title': title,
             'series': series,
@@ -179,9 +177,8 @@ class AradramaEpisodeListIE(AradramaBaseIE):
     _VALID_URL = _EPISODE_LIST_URL_RE
 
     def _real_extract(self, url):
-        video_id = self._match_id(url)
-        video_id_readable = urllib.parse.unquote(video_id)
-        webpage = self._download_webpage(url, video_id_readable)
+        video_id = urllib.parse.unquote(self._match_id(url))
+        webpage = self._download_webpage(url, video_id)
 
         self.debug('INITIAL WEB PAGE', webpage)
 
@@ -204,9 +201,8 @@ class AradramaSerieIE(AradramaBaseIE):
     _VALID_URL = _SERIES_URL_RE
 
     def _real_extract(self, url):
-        video_id = self._match_id(url)
-        video_id_readable = urllib.parse.unquote(video_id)
-        webpage = self._download_webpage(url, video_id_readable)
+        video_id = urllib.parse.unquote(self._match_id(url))
+        webpage = self._download_webpage(url, video_id)
 
         self.debug('INITIAL WEB PAGE', webpage)
 
