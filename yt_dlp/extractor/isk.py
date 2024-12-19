@@ -334,7 +334,13 @@ class IskEpisodeIE(IskBaseIE):
         self.debug('video duration', _duration_text(video_duration))
 
         if video_duration < _MIN_DURATION_SECONDS:
-            raise ExtractorError(f'Video duration {_duration_text(video_duration)} is too short', expected=True)
+            return {
+                'id': 'too-short',
+                'title': title,
+                'series': series,
+                'description': description,
+                'formats': m3u8_formats,
+            }
 
         return {
             'id': video_id,
