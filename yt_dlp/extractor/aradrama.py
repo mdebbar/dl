@@ -44,10 +44,12 @@ class AradramaBaseIE(InfoExtractor):
             'vk.com',
             'rubyvid',
             'vidmoly',
+            'uqload',
+
 
             # Not supported:
             # 'luluvdo',
-            # 'vidhidepre',
+            # 'vidhide',
             # 'dood.li',
             # 'swdyu.com',
             # 'filemoon',
@@ -55,7 +57,7 @@ class AradramaBaseIE(InfoExtractor):
             # 'upstream.to',
             # 'mixdrop',
             # 'vadbam',
-            # 'uqload',
+            # 'playerwish',
 
             # EASY, HAS DIRECT MP4 LINK:
             # 'vdbtm',
@@ -118,6 +120,14 @@ class AradramaBaseIE(InfoExtractor):
             except Exception:
                 pass
 
+            # uqload
+            try:
+                mobj = re.search(r'([\'"])(?P<mp4_url>https?://[^\'"]*uqload[^\'"]*\.mp4)\1', iframe_html)
+                if mobj:
+                    return mobj.group('mp4_url'), iframe_url
+            except Exception:
+                pass
+
             self.report_warning(f'Could not find m3u8 URL in iframe {iframe_url}', video_id=video_id)
 
         raise ExtractorError('Could not find an m3u8 URL in any of the server links', video_id=video_id)
@@ -158,24 +168,30 @@ class AradramaEpisodeIE(AradramaBaseIE):
 
         self.debug('SERVER LINKS', server_links)
 
-        m3u8_url, iframe_url = self._try_server_links(server_links, video_id, url)
+        result_url, iframe_url = self._try_server_links(server_links, video_id, url)
 
-        self.debug('m3u8 URL', m3u8_url)
+        self.debug('RESULT URL', result_url)
 
-        m3u8_formats = self._extract_m3u8_formats(m3u8_url, video_id, headers={'Referer': iframe_url})
-        m3u8_formats_with_referer = [
-            {**format_dict, 'http_headers': {'Referer': iframe_url}}
-            for format_dict in m3u8_formats
-        ]
-
-        self.debug('m3u8 formats', m3u8_formats_with_referer)
+        if result_url.endswith('.mp4'):
+            result = {
+                'url': result_url,
+                'http_headers': {'Referer': iframe_url},
+            }
+        elif result_url.endswith('.m3u8'):
+            m3u8_formats = self._extract_m3u8_formats(result_url, video_id, headers={'Referer': iframe_url})
+            m3u8_formats_with_referer = [
+                {**format_dict, 'http_headers': {'Referer': iframe_url}}
+                for format_dict in m3u8_formats
+            ]
+            self.debug('m3u8 formats', m3u8_formats_with_referer)
+            result = {'formats': m3u8_formats_with_referer}
 
         return {
             'id': video_id,
             'title': title,
             'series': series,
             'description': description,
-            'formats': m3u8_formats_with_referer,
+            **result,
         }
 
 
