@@ -164,7 +164,7 @@ class AradramaEpisodeIE(AradramaBaseIE):
 
         m3u8_formats = self._extract_m3u8_formats(m3u8_url, video_id, headers={'Referer': iframe_url})
         m3u8_formats_with_referer = [
-            {**format_dict, 'headers': {'Referer': iframe_url}}
+            {**format_dict, 'http_headers': {'Referer': iframe_url}}
             for format_dict in m3u8_formats
         ]
 
