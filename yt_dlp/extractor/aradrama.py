@@ -172,12 +172,12 @@ class AradramaEpisodeIE(AradramaBaseIE):
 
         self.debug('RESULT URL', result_url)
 
-        if result_url.endswith('.mp4'):
+        if '.mp4' in result_url:
             result = {
                 'url': result_url,
                 'http_headers': {'Referer': iframe_url},
             }
-        elif result_url.endswith('.m3u8'):
+        elif '.m3u8' in result_url:
             m3u8_formats = self._extract_m3u8_formats(result_url, video_id, headers={'Referer': iframe_url})
             m3u8_formats_with_referer = [
                 {**format_dict, 'http_headers': {'Referer': iframe_url}}
@@ -185,6 +185,8 @@ class AradramaEpisodeIE(AradramaBaseIE):
             ]
             self.debug('m3u8 formats', m3u8_formats_with_referer)
             result = {'formats': m3u8_formats_with_referer}
+        else:
+            raise ExtractorError(f'Weird result url: {result_url}', video_id=video_id)
 
         return {
             'id': video_id,
