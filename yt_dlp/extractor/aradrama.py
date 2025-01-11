@@ -24,7 +24,7 @@ _DOMAIN_RE = r'https?://(?:\w{1,4}\.)?aradra?ma?tv\.(?:\w{2,4})'
 _EPISODE_ID_RE = r'(?P<series>[^/]+?)-' + _AL_HALAKA + r'-(?P<episode>\d+)'
 
 _SERIES_URL_RE = rf'{_DOMAIN_RE}/\d+/\d+/(?P<id>[^/]+)'
-_EPISODE_LIST_URL_RE = rf'{_DOMAIN_RE}/category/episodes/new/[\w-]+/(?P<id>[^/]+)(/page/\d+)?'
+_EPISODE_LIST_URL_RE = rf'{_DOMAIN_RE}/category/episodes/([\w-]+/)?[\w-]+/(?P<id>[^/"<>]+)(/page/\d+)?'
 _EPISODE_URL_RE = rf'{_DOMAIN_RE}/\d+/\d+/(?P<id>{_EPISODE_ID_RE})'
 
 
