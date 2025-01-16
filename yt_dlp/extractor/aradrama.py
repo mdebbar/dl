@@ -40,11 +40,12 @@ class AradramaBaseIE(InfoExtractor):
 
     def _find_supported_cdns(self, cdn_links, video_id):
         supported_cdns = [
-            'ok.ru',
-            'vk.com',
-            'rubyvid',
-            'vidmoly',
-            'uqload',
+            # 'ok.ru',
+            # 'vk.com',
+            # 'rubyvid',
+            # 'vidmoly',
+            # 'uqload',
+            'mixdrp',
 
 
             # Not supported:
@@ -75,6 +76,22 @@ class AradramaBaseIE(InfoExtractor):
 
         if not found:
             raise ExtractorError('Could not find a link to a supported CDN', video_id=video_id)
+
+    def _get_server_links(self, webpage):
+        # Some episode pages have a <ul> of `links-server`
+        servers_ul = get_element_by_class('links-server', webpage)
+        if servers_ul is not None:
+            servers_li = get_elements_html_by_class('server', servers_ul)
+            return [extract_attributes(li)['data-url'] for li in servers_li]
+
+        # Some episode pages have an `episode` container with <iframe>s inside
+        episode_container = get_element_by_class('episode', webpage)
+        if episode_container is not None:
+            iframes_mobj = re.findall(r'<iframe[^>]*src="(?P<iframe_src>[^"]+)"', episode_container)
+            if iframes_mobj:
+                return [mobj for mobj in iframes_mobj]
+
+        return []
 
     def _try_server_links(self, server_links, video_id, referer):
         for iframe_url in self._find_supported_cdns(server_links, video_id):
@@ -128,6 +145,23 @@ class AradramaBaseIE(InfoExtractor):
             except Exception:
                 pass
 
+            # mixdrp
+            try:
+                mobj = re.search(r'<script[^>]*>.*?MDCore\.ref(?P<script_content>.*?)</script>', iframe_html, re.DOTALL)
+                if mobj:
+                    script_content = mobj.group('script_content')
+                    # Extract "definitions"
+                    definitions = re.findall(r'\'(\d\.[\da-zA-Z]="[^"]*";\s*)+\'', script_content)
+                    definitions = re.findall(r'\'(.*="[^"]*";\s*)+\'', script_content)
+                    print('*' * 20)
+                    print(script_content)
+                    print('+' * 20)
+                    print('\n\n'.join(definitions))
+                else:
+                    print('?' * 20)
+            except Exception:
+                pass
+
             self.report_warning(f'Could not find m3u8 URL in iframe {iframe_url}', video_id=video_id)
 
         raise ExtractorError('Could not find an m3u8 URL in any of the server links', video_id=video_id)
@@ -162,9 +196,7 @@ class AradramaEpisodeIE(AradramaBaseIE):
         description = self._og_search_description(webpage)
         self.debug('DESCRIPTION', description)
 
-        servers_ul = get_element_by_class('links-server', webpage)
-        servers_li = get_elements_html_by_class('server', servers_ul)
-        server_links = [extract_attributes(li)['data-url'] for li in servers_li]
+        server_links = self._get_server_links(webpage)
 
         self.debug('SERVER LINKS', server_links)
 
@@ -193,7 +225,7 @@ class AradramaEpisodeIE(AradramaBaseIE):
             'title': title,
             'series': series,
             'description': description,
-            **result,
+            # **result,
         }
 
 
