@@ -128,7 +128,7 @@ class AradramaBaseIE(InfoExtractor):
             except Exception:
                 pass
 
-            self.to_screen(f'Could not find m3u8 URL in iframe {iframe_url}', video_id=video_id)
+            self.to_screen(f'Could not find m3u8 URL in iframe {iframe_url}')
 
         raise ExtractorError('Could not find an m3u8 URL in any of the server links', video_id=video_id)
 
