@@ -47,7 +47,7 @@ class IskBaseIE(InfoExtractor):
     def _get_series_name(self, url):
         series = self._match_valid_url(url).group('series')
         series = re.sub(r'-(hd|bt)$', '', series)
-        series = re.sub(r'-\d{1,2}[a-zA-Z]{2,3}$', '', series)
+        series = re.sub(r'-\d{1,2}[a-zA-Z]{2,3}\d{0,2}$', '', series)
         return string.capwords(series.replace('-', ' '))
 
     def _download_with_referer(self, url, video_id, note, referer, data=None):
