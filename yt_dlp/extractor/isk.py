@@ -19,7 +19,7 @@ from ..utils import (
 _HOSTS = '|'.join([
     # 'eceeq',
     '3isk',
-    # '3ick',
+    '3ick',
     # 'esheaq',
 ])
 _DOMAIN_RE = rf'https?://(?:\w{{1,4}}\.)?(?:{_HOSTS})\.(?:\w{{2,4}})'
