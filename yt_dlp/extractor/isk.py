@@ -19,10 +19,11 @@ from ..utils import (
 _HOSTS = '|'.join([
     # 'eceeq',
     '3isk',
+    '3iskk',
     '3ick',
     # 'esheaq',
 ])
-_DOMAIN_RE = rf'https?://(?:\w{{1,4}}\.)?(?:{_HOSTS})\.(?:\w{{2,4}})'
+_DOMAIN_RE = rf'https?://(?:\w{{1,4}}\.)?(?:{_HOSTS})\.(?:\w{{2,5}})'
 
 _SERIE_ID_RE = r'serie-(?P<series>[\w-]+)'
 _EPISODE_ID_RE = r'serie-(?P<series>[\w-]+?)-season-(?P<season>\d+)[\w\d-]*?-episode-(?P<episode>\d+)'
