@@ -12,4 +12,4 @@ COPY . .
 
 RUN pip install .[default]
 
-ENTRYPOINT ["/app/yt-dlp.sh"]
+ENTRYPOINT ["/app/mouad/docker_entrypoint.sh"]
