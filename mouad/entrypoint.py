@@ -24,11 +24,12 @@ def one_cmd(args):
 
     (id, url) = args
 
-    from yt_dlp import YoutubeDL
-    with YoutubeDL(['--config-location', ONE_CONFIG]) as ydl:
+    from yt_dlp import YoutubeDL, parse_options
+    _, __, ___, ydl_opts = parse_options(['--config-location', ONE_CONFIG])
+    with YoutubeDL(ydl_opts) as ydl:
         # 1. Parse <id> to extract: <series>, <season_number>, <episode_number>
         # 2. Pass those as extra_info to ydl.extract_info()
-        ydl.__download_wrapper(ydl.extract_info)(url, extra_info={'id': id})
+        ydl.extract_info(url, extra_info={'id': id})
         # 3. If download is successful, append the <id> to the download archive
         return ydl._download_retcode
 
