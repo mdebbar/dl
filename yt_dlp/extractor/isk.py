@@ -364,8 +364,13 @@ class IskSerieIE(IskBaseIE):
 
         episodes_container = get_element_by_id('episodes', webpage)
 
+        episode_nums = [
+            mobj.group('epnum') for mobj in re.finditer(r'data-ep-num=([\'"])(?P<epnum>.*?)\1', episodes_container)
+        ]
+
+        episode_url_template = url.replace('/tvshows/', '/episodes/').rstrip('/') + '-season-1-episode-'
         episode_urls = [
-            mobj.group('url') for mobj in re.finditer(r'href=([\'"])(?P<url>.*?)\1', episodes_container)
+            f'{episode_url_template}{epnum}/' for epnum in episode_nums
         ]
 
         self.debug('EPISODE COUNT', len(episode_urls))
