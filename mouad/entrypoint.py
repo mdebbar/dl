@@ -80,7 +80,7 @@ def aradrama_cmd(args):
     id, url = args
 
     # الحلقة
-    AL_HALAKA = '%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9'
+    AL_HALAKA = 'الحلقة'
     ID_RE = r'(?P<series>[^/]+?)-(?:' + AL_HALAKA + r'-)?(?P<episode>\d+)'
     if not re.match(ID_RE, id):
         print(f'Invalid id: {id}')
