@@ -34,6 +34,13 @@ def cronjob_cmd(args):
     import yt_dlp
     yt_dlp.main(['--config-location', CRONJOB_CONFIG])
 
+# 20 minutes
+_MIN_DURATION_SECONDS = 20 * 60
+
+def reject_short_videos(info, *, incomplete):
+    duration = info.get('duration')
+    if duration and duration < _MIN_DURATION_SECONDS:
+        return f'The video is {duration} seconds (too short!!)'
 
 def isk_cmd(args):
     if (len(args) != 2):
@@ -55,6 +62,7 @@ def isk_cmd(args):
 
     from yt_dlp import YoutubeDL, parse_options
     _, __, ___, ydl_opts = parse_options(['--config-location', ISK_CONFIG])
+    ydl_opts['match_filter'] = reject_short_videos
     with YoutubeDL(ydl_opts) as ydl:
         mobj = re.match(ID_RE, id)
         series = string.capwords(mobj.group('series').replace('-', ' '))
