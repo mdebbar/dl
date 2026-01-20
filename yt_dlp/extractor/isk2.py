@@ -5,6 +5,7 @@ import string
 import urllib.parse
 
 from .common import InfoExtractor
+from ..networking.impersonate import ImpersonateTarget
 from ..utils import (
     ExtractorError,
 )
@@ -56,14 +57,28 @@ class Isk2EpisodeIE(InfoExtractor):
         captured_url = captured_data['url']
         m3u8_text = captured_data['content']
         captured_headers = captured_data.get('headers', {})
+        captured_cookies = captured_data.get('cookies', [])
+
+        # Filter and sanitize headers.
+        # We want to keep security and custom headers that CDNs often check.
+        excluded_headers = {'Host', 'Content-Length', 'Connection', 'Content-Type'}
+        filtered_headers = {
+            k: v for k, v in captured_headers.items() 
+            if k.title() not in excluded_headers
+        }
+
+        if captured_cookies:
+            cookie_str = '; '.join([f'{c["name"]}={c["value"]}' for c in captured_cookies])
+            filtered_headers['Cookie'] = cookie_str
 
         self.to_screen(f'[{self.IE_NAME}] Successfully captured m3u8 from: {captured_url}')
 
         # 3. Determine formats using the captured content
-        formats, _ = self._parse_m3u8_formats_and_subtitles(m3u8_text, captured_url, fatal=False, video_id=video_id)
+        formats, _ = self._parse_m3u8_formats_and_subtitles(
+            m3u8_text, captured_url, fatal=False, video_id=video_id)
 
         for f in formats:
-            f.setdefault('http_headers', {}).update(captured_headers)
+            f.setdefault('http_headers', {}).update(filtered_headers)
 
         return {
             'id': video_id,
@@ -72,7 +87,8 @@ class Isk2EpisodeIE(InfoExtractor):
             'season_number': int(season_num),
             'episode_number': int(episode_num),
             'formats': formats,
-            'http_headers': captured_headers,
+            'headers': filtered_headers,
+            'impersonate': ImpersonateTarget('chrome'),  # Correct way to set impersonation
         }
 
     def _extract_with_playwright(self, url):
@@ -88,7 +104,7 @@ class Isk2EpisodeIE(InfoExtractor):
             )
             page = context.new_page()
 
-            result = {'url': None, 'content': None, 'headers': {}}
+            result = {'url': None, 'content': None, 'headers': {}, 'cookies': []}
 
             def handle_response(response):
                 if (".m3u8" in response.url) and not result['url']:
@@ -97,6 +113,7 @@ class Isk2EpisodeIE(InfoExtractor):
                             result['url'] = response.url
                             result['content'] = response.text()
                             result['headers'] = response.request.headers
+                            result['cookies'] = context.cookies(response.url)
                         except Exception as e:
                             self.report_warning(f'Failed to get response body: {e}')
 
