@@ -49,18 +49,18 @@ class Isk2EpisodeIE(InfoExtractor):
 
         # 2. Use Playwright to extract the actual video URL
         self.write_debug(f'[{self.IE_NAME}] Launching browser to extract video URL for {video_id}...')
-        captured_url = self._extract_with_playwright(url)
+        captured = self._extract_with_playwright(url)
 
-        if not captured_url:
+        if not captured["url"]:
             raise ExtractorError('Playwright failed to capture the video URL', expected=True)
 
-        self.to_screen(f'[{self.IE_NAME}] Successfully captured URL: {captured_url}')
+        self.to_screen(f'[{self.IE_NAME}] Successfully captured URL: {captured["url"]} (with headers: {captured["headers"]})')
 
         # 3. Determine formats
-        if '.m3u8' in captured_url:
-            formats = self._extract_m3u8_formats(captured_url, video_id, ext='mp4')
+        if '.m3u8' in captured["url"]:
+            formats = self._extract_m3u8_formats(captured["url"], video_id, headers=captured['headers'])
         else:
-            formats = [{'url': captured_url}]
+            formats = [{'url': captured['url'], 'headers': captured['headers']}]
 
         return {
             'id': video_id,
@@ -84,12 +84,13 @@ class Isk2EpisodeIE(InfoExtractor):
             )
             page = context.new_page()
 
-            captured_url = [None]
+            result = {"url": None, "headers": None}
 
             def handle_request(request):
-                if (".m3u8" in request.url or ".mp4" in request.url) and not captured_url[0]:
+                if (".m3u8" in request.url or ".mp4" in request.url) and not result["url"]:
                     if "master.m3u8" in request.url or "playlist.m3u8" in request.url or ".mp4" in request.url:
-                        captured_url[0] = request.url
+                        result["url"] = request.url
+                        result["headers"] = request.headers
 
             page.on("request", handle_request)
 
@@ -105,7 +106,7 @@ class Isk2EpisodeIE(InfoExtractor):
 
                 # Poll for the captured URL
                 for _ in range(30):
-                    if captured_url[0]:
+                    if result["url"]:
                         break
                     page.wait_for_timeout(1000)
 
@@ -116,7 +117,7 @@ class Isk2EpisodeIE(InfoExtractor):
             finally:
                 browser.close()
 
-            return captured_url[0]
+            return result
 
 
 class Isk2HomeIE(InfoExtractor):
