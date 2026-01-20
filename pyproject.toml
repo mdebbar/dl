@@ -87,6 +87,9 @@ test = [
 pyinstaller = [
     "pyinstaller",
 ]
+playwright = [
+    "playwright",
+]
 
 [project.urls]
 Documentation = "https://github.com/yt-dlp/yt-dlp#readme"
