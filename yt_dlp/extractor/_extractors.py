@@ -30,6 +30,11 @@ from .isk import (
     IskSerieIE,
 )
 
+from .isk2 import (
+    Isk2EpisodeIE,
+    Isk2HomeIE,
+)
+
 from .aradrama import (
     AradramaEpisodeIE,
     AradramaEpisodeListIE,

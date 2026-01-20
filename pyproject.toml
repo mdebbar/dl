@@ -54,6 +54,7 @@ default = [
     "requests>=2.32.2,<3",
     "urllib3>=2.0.2,<3",
     "websockets>=13.0",
+    "playwright",
 ]
 curl-cffi = [
     "curl-cffi>=0.5.10,!=0.6.*,!=0.7.*,!=0.8.*,!=0.9.*,<0.14; implementation_name=='cpython'",
@@ -73,6 +74,7 @@ dev = [
     "pre-commit",
     "yt-dlp[static-analysis]",
     "yt-dlp[test]",
+    "yt-dlp[playwright]",
 ]
 static-analysis = [
     "autopep8~=2.0",
@@ -83,7 +85,7 @@ test = [
     "pytest-rerunfailures~=14.0",
 ]
 pyinstaller = [
-    "pyinstaller>=6.13.0",  # Windows temp cleanup fixed in 6.13.0
+    "pyinstaller",
 ]
 
 [project.urls]
