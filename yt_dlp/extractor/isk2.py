@@ -41,26 +41,29 @@ class Isk2EpisodeIE(InfoExtractor):
 
         # 1. Capture metadata using standard methods
         series = self._get_series_name(url)
-
         mobj = self._match_valid_url(url)
         season_num = '01'
         episode_num = mobj.group('episode').zfill(2)
         title = f'{series} {season_num}x{episode_num}'
 
-        # 2. Use Playwright to extract the actual video URL
-        self.write_debug(f'[{self.IE_NAME}] Launching browser to extract video URL for {video_id}...')
-        captured_url = self._extract_with_playwright(url)
+        # 2. Use Playwright to extract the actual video URL and its content
+        self.to_screen(f'[{self.IE_NAME}] Launching browser to extract video data for {video_id}...')
+        captured_data = self._extract_with_playwright(url)
 
-        if not captured_url:
-            raise ExtractorError('Playwright failed to capture the video URL', expected=True)
+        if not captured_data or not captured_data.get('content'):
+            raise ExtractorError('Playwright failed to capture the m3u8 content', expected=True)
 
-        self.to_screen(f'[{self.IE_NAME}] Successfully captured URL: {captured_url}')
+        captured_url = captured_data['url']
+        m3u8_text = captured_data['content']
+        captured_headers = captured_data.get('headers', {})
 
-        # 3. Determine formats
-        if '.m3u8' in captured_url:
-            formats = self._extract_m3u8_formats(captured_url, video_id, ext='mp4')
-        else:
-            formats = [{'url': captured_url}]
+        self.to_screen(f'[{self.IE_NAME}] Successfully captured m3u8 from: {captured_url}')
+
+        # 3. Determine formats using the captured content
+        formats, _ = self._parse_m3u8_formats_and_subtitles(m3u8_text, captured_url, fatal=False, video_id=video_id)
+
+        for f in formats:
+            f.setdefault('http_headers', {}).update(captured_headers)
 
         return {
             'id': video_id,
@@ -69,6 +72,7 @@ class Isk2EpisodeIE(InfoExtractor):
             'season_number': int(season_num),
             'episode_number': int(episode_num),
             'formats': formats,
+            'http_headers': captured_headers,
         }
 
     def _extract_with_playwright(self, url):
@@ -84,14 +88,19 @@ class Isk2EpisodeIE(InfoExtractor):
             )
             page = context.new_page()
 
-            captured_url = [None]
+            result = {'url': None, 'content': None, 'headers': {}}
 
-            def handle_request(request):
-                if (".m3u8" in request.url or ".mp4" in request.url) and not captured_url[0]:
-                    if "master.m3u8" in request.url or "playlist.m3u8" in request.url or ".mp4" in request.url:
-                        captured_url[0] = request.url
+            def handle_response(response):
+                if (".m3u8" in response.url) and not result['url']:
+                    if "master.m3u8" in response.url or "playlist.m3u8" in response.url:
+                        try:
+                            result['url'] = response.url
+                            result['content'] = response.text()
+                            result['headers'] = response.request.headers
+                        except Exception as e:
+                            self.report_warning(f'Failed to get response body: {e}')
 
-            page.on("request", handle_request)
+            page.on("response", handle_response)
 
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -103,9 +112,9 @@ class Isk2EpisodeIE(InfoExtractor):
                 else:
                     raise ExtractorError('Could not find the embed link (.getEmbed a) on the page', expected=True)
 
-                # Poll for the captured URL
+                # Poll for the captured data
                 for _ in range(30):
-                    if captured_url[0]:
+                    if result['content']:
                         break
                     page.wait_for_timeout(1000)
 
@@ -116,7 +125,7 @@ class Isk2EpisodeIE(InfoExtractor):
             finally:
                 browser.close()
 
-            return captured_url[0]
+            return result
 
 
 class Isk2HomeIE(InfoExtractor):
