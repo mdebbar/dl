@@ -134,6 +134,11 @@ class IskEpisodeIE(InfoExtractor):
                         break
                     page.wait_for_timeout(1000)
 
+                if not result["url"]:
+                    # TODO: Don't hardcode the `/app/downloads/` path
+                    self.report_warning('Iframe could not show video. See screenshot at /app/downloads/video_error.png.')
+                    page.screenshot(path="/app/downloads/video_error.png", full_page=True)
+
             except Exception as e:
                 if isinstance(e, ExtractorError):
                     raise
