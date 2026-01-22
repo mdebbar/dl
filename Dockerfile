@@ -14,10 +14,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY . .
+RUN pip install .[default]
 
-RUN pip install .[default] \
-    && playwright install chromium --with-deps \
-    && playwright install firefox --with-deps
+RUN playwright install chromium --with-deps
+RUN playwright install firefox --with-deps
+
+COPY . .
 
 ENTRYPOINT ["/app/mouad/docker_entrypoint.sh"]
