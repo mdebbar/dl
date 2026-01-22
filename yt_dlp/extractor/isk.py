@@ -28,6 +28,9 @@ _HOME_URL_RE = rf'{_DOMAIN_RE}/?$'
 # 20 minutes
 _MIN_DURATION_SECONDS = 20 * 60
 
+_FIREFOX_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
+_CHROME_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
 
 def _get_series_name(url):
     series = re.match(_EPISODE_URL_RE, url).group('series')
@@ -83,9 +86,7 @@ class IskEpisodeIE(InfoExtractor):
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
+            context = browser.new_context(user_agent=_CHROME_USER_AGENT)
             page = context.new_page()
 
             result = {"url": None, "headers": None}
@@ -152,9 +153,7 @@ class IskHomeIE(InfoExtractor):
 
         with sync_playwright() as p:
             browser = p.firefox.launch(headless=True)
-            context = browser.new_context(
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
-            )
+            context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
             try:
