@@ -82,7 +82,7 @@ class IskEpisodeIE(InfoExtractor):
             raise ExtractorError('playwright is not installed. Run "pip install playwright && playwright install chromium"', expected=True)
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context(
                 user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
