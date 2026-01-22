@@ -18,5 +18,6 @@ COPY . .
 
 RUN pip install .[default] \
     && playwright install chromium --with-deps
+    && playwright install firefox --with-deps
 
 ENTRYPOINT ["/app/mouad/docker_entrypoint.sh"]
