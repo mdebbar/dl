@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install .[default]
 
-RUN playwright install chromium --with-deps
+# RUN playwright install chromium --with-deps
 RUN playwright install firefox --with-deps
 
 

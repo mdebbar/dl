@@ -29,7 +29,7 @@ _HOME_URL_RE = rf'{_DOMAIN_RE}/?$'
 _MIN_DURATION_SECONDS = 20 * 60
 
 _FIREFOX_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
-_CHROME_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+# _CHROME_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
 
 def _get_series_name(url):
@@ -82,7 +82,7 @@ class IskEpisodeIE(InfoExtractor):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
-            raise ExtractorError('playwright is not installed. Run "pip install playwright && playwright install chromium"', expected=True)
+            raise ExtractorError('playwright is not installed. Run "pip install playwright"', expected=True)
 
         with sync_playwright() as p:
             proxy_url = self.get_param('proxy')
