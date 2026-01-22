@@ -16,6 +16,14 @@ WORKDIR /app
 
 COPY . .
 
+# Codecs required for the Playwright browser to play videos
+RUN apt-get update && apt-get install -y \
+    libavcodec-extra \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    ffmpeg
+
 RUN pip install .[default]
 
 RUN playwright install chromium --with-deps
