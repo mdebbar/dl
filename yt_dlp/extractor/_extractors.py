@@ -27,12 +27,7 @@ from .youtube import (  # Youtube is moved to the top to improve performance
 
 from .isk import (
     IskEpisodeIE,
-    IskSerieIE,
-)
-
-from .isk2 import (
-    Isk2EpisodeIE,
-    Isk2HomeIE,
+    IskHomeIE,
 )
 
 from .aradrama import (
