@@ -85,8 +85,10 @@ class IskEpisodeIE(InfoExtractor):
             raise ExtractorError('playwright is not installed. Run "pip install playwright && playwright install chromium"', expected=True)
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=_CHROME_USER_AGENT)
+            proxy_url = self.get_param('proxy')
+            proxy_config = {"server": proxy_url} if proxy_url else None
+            browser = p.firefox.launch(headless=True, proxy=proxy_config)
+            context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
             result = {"url": None, "headers": None}
