@@ -107,7 +107,7 @@ class IskEpisodeIE(InfoExtractor):
                 # This listener will automatically close any ad tab that opens
                 context.on("page", lambda new_page: new_page.close())
 
-                watch_link = page.get_by_text(WATCH_LABEL)
+                watch_link = page.get_by_text(WATCH_LABEL, exact=True)
                 outer_iframe = page.frame_locator('#iframe_player')
 
                 attempts = 0
