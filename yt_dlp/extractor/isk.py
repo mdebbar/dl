@@ -177,7 +177,8 @@ class IskHomeIE(InfoExtractor):
                     except Exception as e:
                         self.report_warning(f'Failed to process episode link {href}: {e}')
 
-                return self.playlist_result(entries, playlist_id='3isk:home')
+                # Reverse the order so we download older videos first.
+                return self.playlist_result(entries[::-1], playlist_id='3isk:home')
 
             except Exception as e:
                 if isinstance(e, ExtractorError):
