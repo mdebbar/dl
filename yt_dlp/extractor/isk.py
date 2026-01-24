@@ -7,6 +7,8 @@ from ..utils import (
     ExtractorError,
 )
 
+# TODO: Don't hardcode the `/app/downloads/` path
+DOWNLOADS_PATH = '/app/downloads'
 WATCH_LABEL = 'مشاهدة الحلقة'
 
 _HOSTS = '|'.join([
@@ -54,7 +56,7 @@ class IskEpisodeIE(InfoExtractor):
         title = f'{series} {season_num}x{episode_num}'
 
         # 2. Use Playwright to extract the actual video URL
-        captured = self._extract_with_playwright(url)
+        captured = self._extract_with_playwright(url, video_id)
 
         if not captured['url']:
             raise ExtractorError('Failed to capture the video URL with Playwright', expected=True)
@@ -78,7 +80,7 @@ class IskEpisodeIE(InfoExtractor):
             'formats': formats,
         }
 
-    def _extract_with_playwright(self, url):
+    def _extract_with_playwright(self, url, video_id):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -133,20 +135,21 @@ class IskEpisodeIE(InfoExtractor):
                     if result["url"]:
                         break
                     page.wait_for_timeout(1000)
-
-                if not result["url"]:
-                    # TODO: Don't hardcode the `/app/downloads/` path
-                    self.report_warning('Iframe could not show video. See screenshot at /app/downloads/video_error.png.')
-                    page.screenshot(path="/app/downloads/video_error.png", full_page=True)
+                    
 
             except Exception as e:
                 if isinstance(e, ExtractorError):
                     raise
                 self.report_warning(f'Playwright error: {e}')
             finally:
+                if not result['url']:
+                    self._error_screenshot(page, video_id)
                 browser.close()
 
             return result
+
+    def _error_screenshot(self, page, video_id):
+        page.screenshot(path=f"{DOWNLOADS_PATH}/errors/{video_id}.png", full_page=True)
 
 
 class IskHomeIE(InfoExtractor):
