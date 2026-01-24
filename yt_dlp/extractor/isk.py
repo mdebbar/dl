@@ -149,7 +149,9 @@ class IskEpisodeIE(InfoExtractor):
             return result
 
     def _error_screenshot(self, page, video_id):
-        page.screenshot(path=f"{DOWNLOADS_PATH}/errors/{video_id}.png", full_page=True)
+        file_path = f"{DOWNLOADS_PATH}/errors/{video_id}.png"
+        self.report_warning(f'See screenshot for details: {file_path}')
+        page.screenshot(path=file_path, full_page=True)
 
 
 class IskHomeIE(InfoExtractor):
