@@ -190,4 +190,6 @@ class IskHomeIE(InfoExtractor):
                     raise
                 self.report_warning(f'Playwright error: {e}')
             finally:
+                file_path = f"{DOWNLOADS_PATH}/home.latest.png"
+                page.screenshot(path=file_path, full_page=True)
                 browser.close()
