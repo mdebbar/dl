@@ -169,7 +169,7 @@ class IskHomeIE(InfoExtractor):
             page = context.new_page()
 
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.goto(url, wait_until="load", timeout=60000)
 
                 episode_links = page.locator('.items-latest-eps a')
 
