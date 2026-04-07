@@ -17,6 +17,7 @@ _HOSTS = '|'.join([
     '3iskk',
     '3ick',
     '3esk',
+    'qisk',
     # 'esheaq',
 ])
 _DOMAIN_RE = rf'https?://(?:\w{{1,4}}\.)?(?:{_HOSTS})\.(?:\w{{2,5}})'
