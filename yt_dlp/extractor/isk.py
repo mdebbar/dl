@@ -21,7 +21,7 @@ _HOSTS = '|'.join([
     '3isktr',
     # 'esheaq',
 ])
-_DOMAIN_RE = rf'https?://(?:\w{{1,4}}\.)?(?:{_HOSTS})\.(?:\w{{2,5}})'
+_DOMAIN_RE = rf'https?://(?:\w{{1,4}}\.)?(?:{_HOSTS})\.(?:\w{{2,6}})'
 
 _EPISODE_ID_RE = r'serie-(?P<series>[\w-]+?)-season-(?P<season>\d+)[\w\d-]*?-ep(?:isode)?-(?P<episode>\d+)'
 
