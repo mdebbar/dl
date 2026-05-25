@@ -90,7 +90,6 @@ class IskEpisodeIE(InfoExtractor):
 
         with sync_playwright() as p:
             proxy_url = self.get_param('proxy')
-            proxy_config = 
             browser = p.firefox.launch(
                 headless=True,
                 proxy={"server": proxy_url} if proxy_url else None,
