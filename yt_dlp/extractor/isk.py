@@ -89,15 +89,7 @@ class IskEpisodeIE(InfoExtractor):
             raise ExtractorError('playwright is not installed. Run "pip install playwright"', expected=True)
 
         with sync_playwright() as p:
-            proxy_url = self.get_param('proxy')
-            browser = p.firefox.launch(
-                headless=True,
-                proxy={"server": proxy_url} if proxy_url else None,
-                firefox_user_prefs={
-                    # Force DNS through the proxy if a proxy is configured.
-                    "network.proxy.socks_remote_dns": True
-                }
-            )
+            browser = p.firefox.launch(headless=True)
             context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
@@ -172,15 +164,7 @@ class IskHomeIE(InfoExtractor):
             raise ExtractorError('playwright is not installed. Run "pip install playwright && playwright install firefox"', expected=True)
 
         with sync_playwright() as p:
-            proxy_url = self.get_param('proxy')
-            browser = p.firefox.launch(
-                headless=True,
-                proxy={"server": proxy_url} if proxy_url else None,
-                firefox_user_prefs={
-                    # Force DNS through the proxy if a proxy is configured.
-                    "network.proxy.socks_remote_dns": True
-                }
-            )
+            browser = p.firefox.launch(headless=True)
             context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
