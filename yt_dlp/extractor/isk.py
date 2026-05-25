@@ -172,6 +172,7 @@ class IskHomeIE(InfoExtractor):
             raise ExtractorError('playwright is not installed. Run "pip install playwright && playwright install firefox"', expected=True)
 
         with sync_playwright() as p:
+            proxy_url = self.get_param('proxy')
             browser = p.firefox.launch(
                 headless=True,
                 proxy={"server": proxy_url} if proxy_url else None,
