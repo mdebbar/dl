@@ -90,8 +90,15 @@ class IskEpisodeIE(InfoExtractor):
 
         with sync_playwright() as p:
             proxy_url = self.get_param('proxy')
-            proxy_config = {"server": proxy_url} if proxy_url else None
-            browser = p.firefox.launch(headless=True, proxy=proxy_config)
+            proxy_config = 
+            browser = p.firefox.launch(
+                headless=True,
+                proxy={"server": proxy_url} if proxy_url else None,
+                firefox_user_prefs={
+                    # Force DNS through the proxy if a proxy is configured.
+                    "network.proxy.socks_remote_dns": True
+                }
+            )
             context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
