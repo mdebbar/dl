@@ -1,6 +1,7 @@
 import json
 import re
 import string
+import time
 
 from .common import InfoExtractor
 from ..utils import (
@@ -89,7 +90,13 @@ class IskEpisodeIE(InfoExtractor):
             raise ExtractorError('playwright is not installed. Run "pip install playwright"', expected=True)
 
         with sync_playwright() as p:
+            start_time = time.perf_counter()
             browser = p.firefox.launch(headless=True)
+            end_time = time.perf_counter()
+
+            startup_duration = end_time - start_time
+            print(f"Firefox startup time: {startup_duration:.3f} seconds")
+            
             context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
@@ -164,7 +171,13 @@ class IskHomeIE(InfoExtractor):
             raise ExtractorError('playwright is not installed. Run "pip install playwright && playwright install firefox"', expected=True)
 
         with sync_playwright() as p:
+            start_time = time.perf_counter()
             browser = p.firefox.launch(headless=True)
+            end_time = time.perf_counter()
+
+            startup_duration = end_time - start_time
+            print(f"Firefox startup time: {startup_duration:.3f} seconds")
+
             context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
