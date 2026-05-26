@@ -4,6 +4,7 @@ import sys
 from urllib.parse import urlparse
 
 CRONJOB_CONFIG = '/app/mouad/ytdlp_cronjob.conf'
+ONE_CONFIG = '/app/mouad/ytdlp_one.conf'
 ISK_CONFIG = '/app/mouad/ytdlp_3isk.conf'
 ARADRAMA_CONFIG = '/app/mouad/ytdlp_aradrama.conf'
 
@@ -13,6 +14,8 @@ def main(args):
     match cmd:
         case 'cronjob':
             return cronjob_cmd(args)
+        case 'one':
+            return one_cmd(args)
         case '3isk':
             return isk_cmd(args)
         case 'aradrama':
@@ -33,6 +36,10 @@ def cronjob_cmd(args):
 
     import yt_dlp
     yt_dlp.main(['--config-location', CRONJOB_CONFIG])
+
+def one_cmd(args):
+    import yt_dlp
+    yt_dlp.main(args + ['--config-location', ONE_CONFIG])
 
 # 20 minutes
 _MIN_DURATION_SECONDS = 20 * 60
