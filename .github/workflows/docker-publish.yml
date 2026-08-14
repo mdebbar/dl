@@ -2,7 +2,7 @@ name: Build and Publish Docker Image
 
 on:
   push:
-    branches: [ "docker_compose" ]
+    branches: [ "master" ]
 
 jobs:
   build-and-push:
