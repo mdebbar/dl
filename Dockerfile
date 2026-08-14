@@ -26,8 +26,11 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install .[default]
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 # RUN playwright install chromium --with-deps
-RUN playwright install firefox --with-deps
+RUN playwright install firefox --with-deps && \
+    chmod -R 777 /ms-playwright
 
 
 ENTRYPOINT ["/app/mouad/docker_entrypoint.sh"]
