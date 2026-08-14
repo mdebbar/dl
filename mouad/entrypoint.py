@@ -56,7 +56,7 @@ def isk_cmd(args):
 
     id, url = args
 
-    ID_RE = r'serie-(?P<series>[\w-]+?)-season-(?P<season>\d+)-episode-(?P<episode>\d+)'
+    ID_RE = r'serie-(?P<series>[\w-]+?)-season-(?P<season>\d+)[\w\d-]*?-ep(?:isode|oside)?-(?P<episode>\d+)'
     if not re.match(ID_RE, id):
         print(f'Invalid id: {id}')
         print('Expected format: serie-<series>-season-<season_number>-episode-<episode_number>')
