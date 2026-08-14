@@ -107,12 +107,6 @@ build = [
     "build",
     "hatchling>=1.27.0",
 ]
-dev = [
-    "pre-commit",
-    "yt-dlp[static-analysis]",
-    "yt-dlp[test]",
-    "yt-dlp[playwright]",
-]
 static-analysis = [
     "autopep8~=2.0",
     "ruff~=0.15.0",
