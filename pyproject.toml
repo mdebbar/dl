@@ -56,6 +56,7 @@ default = [
     "urllib3>=2.0.2,<3",
     "websockets>=13.0",
     "yt-dlp-ejs==0.8.0",
+    "playwright",
 ]
 curl-cffi = [
     "curl-cffi>=0.5.10,!=0.6.*,!=0.7.*,!=0.8.*,!=0.9.*,<0.16 ; implementation_name == 'cpython'",
@@ -106,6 +107,12 @@ build = [
     "build",
     "hatchling>=1.27.0",
 ]
+dev = [
+    "pre-commit",
+    "yt-dlp[static-analysis]",
+    "yt-dlp[test]",
+    "yt-dlp[playwright]",
+]
 static-analysis = [
     "autopep8~=2.0",
     "ruff~=0.15.0",
@@ -133,6 +140,9 @@ pip = [
 ]
 uv = [
     "uv>=0.10",
+]
+playwright = [
+    "playwright",
 ]
 
 [project.urls]

@@ -1,3 +1,14 @@
+from .isk import (
+    IskEpisodeIE,
+    IskHomeIE,
+)
+
+from .aradrama import (
+    AradramaEpisodeIE,
+    AradramaEpisodeListIE,
+    AradramaSerieIE,
+)
+
 # flake8: noqa: F401
 from .abc import (
     ABCIE,
