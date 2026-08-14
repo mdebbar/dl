@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import string
 import time
@@ -157,8 +158,10 @@ class IskEpisodeIE(InfoExtractor):
 
     def _error_screenshot(self, page, video_id):
         file_path = f"{DOWNLOADS_PATH}/errors/{video_id}.png"
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         self.report_warning(f'See screenshot for details: {file_path}')
         page.screenshot(path=file_path, full_page=True)
+
 
 
 class IskHomeIE(InfoExtractor):

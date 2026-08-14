@@ -26,11 +26,17 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install .[default]
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    HOME=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache \
+    XDG_CONFIG_HOME=/tmp/.config \
+    XDG_DATA_HOME=/tmp/.local/share
 
 # RUN playwright install chromium --with-deps
 RUN playwright install firefox --with-deps && \
+    fc-cache -f && \
     chmod -R 777 /ms-playwright
 
 
 ENTRYPOINT ["/app/mouad/docker_entrypoint.sh"]
+
