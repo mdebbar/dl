@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import string
@@ -31,8 +30,8 @@ _EPISODE_URL_RE = rf'{_DOMAIN_RE}/watch/episodes/(?P<id>{_EPISODE_ID_RE})'
 
 _HOME_URL_RE = rf'{_DOMAIN_RE}/?$'
 
-# 20 minutes
-_MIN_DURATION_SECONDS = 20 * 60
+# 50 minutes
+_MIN_DURATION_SECONDS = 50 * 60
 
 _FIREFOX_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
 # _CHROME_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -66,17 +65,17 @@ class IskEpisodeIE(InfoExtractor):
             raise ExtractorError('Failed to capture the video URL with Playwright', expected=True)
 
         # 3. Determine formats
-        if '.m3u8' in captured["url"]:
-            formats = self._extract_m3u8_formats(captured["url"], video_id, headers=captured['headers'])
+        if '.m3u8' in captured['url']:
+            formats = self._extract_m3u8_formats(captured['url'], video_id, headers=captured['headers'])
         else:
             raise ExtractorError('Expected an m3u8 URL but got something else', expected=True)
 
         video_duration = self._extract_m3u8_vod_duration(formats[0]['url'], video_id)
 
-        id = 'too-short' if video_duration < _MIN_DURATION_SECONDS else video_id
+        result_id = 'too-short' if video_duration < _MIN_DURATION_SECONDS else video_id
 
         return {
-            'id': id,
+            'id': result_id,
             'title': title,
             'series': series,
             'season_number': int(season_num),
@@ -96,26 +95,26 @@ class IskEpisodeIE(InfoExtractor):
             end_time = time.perf_counter()
 
             startup_duration = end_time - start_time
-            print(f"Firefox startup time: {startup_duration:.3f} seconds")
-            
+            self.write_debug(f'Firefox startup time: {startup_duration:.3f} seconds')
+
             context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
-            result = {"url": None, "headers": None}
+            result = {'url': None, 'headers': None}
 
             def handle_request(request):
-                if (".m3u8" in request.url) and not result["url"]:
-                    if "master.m3u8" in request.url or "playlist.m3u8" in request.url:
-                        result["url"] = request.url
-                        result["headers"] = request.headers
+                if ('.m3u8' in request.url) and not result['url']:
+                    if 'master.m3u8' in request.url or 'playlist.m3u8' in request.url:
+                        result['url'] = request.url
+                        result['headers'] = request.headers
 
-            page.on("request", handle_request)
+            page.on('request', handle_request)
 
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.goto(url, wait_until='domcontentloaded', timeout=60000)
 
                 # This listener will automatically close any ad tab that opens
-                context.on("page", lambda new_page: new_page.close())
+                context.on('page', lambda new_page: new_page.close())
 
                 watch_link = page.get_by_text(WATCH_LABEL, exact=True)
                 outer_iframe = page.frame_locator('#iframe_player')
@@ -128,7 +127,7 @@ class IskEpisodeIE(InfoExtractor):
                     try:
                         outer_iframe.owner.wait_for(timeout=2000)
                         break
-                    except:
+                    except Exception:
                         attempts += 1
 
                 if attempts == 5:
@@ -140,10 +139,9 @@ class IskEpisodeIE(InfoExtractor):
 
                 # Poll for the captured URL
                 for _ in range(30):
-                    if result["url"]:
+                    if result['url']:
                         break
                     page.wait_for_timeout(1000)
-                    
 
             except Exception as e:
                 if isinstance(e, ExtractorError):
@@ -157,11 +155,10 @@ class IskEpisodeIE(InfoExtractor):
             return result
 
     def _error_screenshot(self, page, video_id):
-        file_path = f"{DOWNLOADS_PATH}/errors/{video_id}.png"
+        file_path = f'{DOWNLOADS_PATH}/errors/{video_id}.png'
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         self.report_warning(f'See screenshot for details: {file_path}')
         page.screenshot(path=file_path, full_page=True)
-
 
 
 class IskHomeIE(InfoExtractor):
@@ -179,13 +176,13 @@ class IskHomeIE(InfoExtractor):
             end_time = time.perf_counter()
 
             startup_duration = end_time - start_time
-            print(f"Firefox startup time: {startup_duration:.3f} seconds")
+            self.write_debug(f'Firefox startup time: {startup_duration:.3f} seconds')
 
             context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
             page = context.new_page()
 
             try:
-                page.goto(url, wait_until="load", timeout=60000)
+                page.goto(url, wait_until='load', timeout=60000)
 
                 episode_links = page.locator('.items-latest-eps a')
 
@@ -206,6 +203,6 @@ class IskHomeIE(InfoExtractor):
                     raise
                 self.report_warning(f'Playwright error: {e}')
             finally:
-                file_path = f"{DOWNLOADS_PATH}/home.latest.png"
+                file_path = f'{DOWNLOADS_PATH}/home.latest.png'
                 page.screenshot(path=file_path, full_page=True)
                 browser.close()
