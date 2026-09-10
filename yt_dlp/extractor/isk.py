@@ -1,3 +1,5 @@
+import fcntl
+import json
 import os
 import re
 import string
@@ -30,8 +32,23 @@ _EPISODE_URL_RE = rf'{_DOMAIN_RE}/watch/episodes/(?P<id>{_EPISODE_ID_RE})'
 
 _HOME_URL_RE = rf'{_DOMAIN_RE}/?$'
 
-# 50 minutes
-_MIN_DURATION_SECONDS = 50 * 60
+# 3isk sometimes publishes a short partial video before swapping in the full episode some time
+# later. A fixed duration cutoff can't tell "genuinely short episode" apart from "still
+# uploading", so instead:
+#  - durations below this are rejected outright (ads/error pages, never a real episode)
+_JUNK_DURATION_SECONDS = 15 * 60
+#  - durations at or above this are trusted immediately, no waiting
+_FAST_ACCEPT_DURATION_SECONDS = 100 * 60
+#  - anything in between is only accepted once the *same* duration has been seen on two
+#    separate extractions spaced at least this far apart (i.e. it has stopped growing)
+_STABILITY_WINDOW_SECONDS = 30 * 60
+
+# Sentinel id returned for a video that isn't confirmed complete yet. Keeping this out of
+# `downloaded.txt` (rather than the real video id) is what makes --download-archive retry it
+# on a later run instead of treating it as done.
+_PENDING_ID = 'too-short'
+
+_DURATION_STATE_PATH = f'{DOWNLOADS_PATH}/.isk_duration_state.json'
 
 _FIREFOX_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
 # _CHROME_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -42,6 +59,42 @@ def _get_series_name(url):
     # Remove extraneous suffixes like 25oct, etc.
     series = re.sub(r'-\d{1,2}[a-zA-Z]{2,4}\d{0,2}$', '', series)
     return string.capwords(series.replace('-', ' '))
+
+
+def _is_duration_stable(video_id, duration):
+    """True once `duration` has stopped growing for this episode across separate runs."""
+    os.makedirs(os.path.dirname(_DURATION_STATE_PATH), exist_ok=True)
+    with open(_DURATION_STATE_PATH, 'a+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        try:
+            state = json.load(f)
+        except json.JSONDecodeError:
+            state = {}
+
+        now = time.time()
+        entry = state.get(video_id)
+        stable = bool(entry) and entry['duration'] == duration \
+            and (now - entry['first_seen']) >= _STABILITY_WINDOW_SECONDS
+
+        if stable:
+            state.pop(video_id, None)
+        elif not entry or entry['duration'] != duration:
+            state[video_id] = {'duration': duration, 'first_seen': now}
+
+        f.seek(0)
+        f.truncate()
+        json.dump(state, f)
+
+    return stable
+
+
+def _resolve_result_id(video_id, duration):
+    if duration < _JUNK_DURATION_SECONDS:
+        return _PENDING_ID
+    if duration >= _FAST_ACCEPT_DURATION_SECONDS:
+        return video_id
+    return video_id if _is_duration_stable(video_id, duration) else _PENDING_ID
 
 
 class IskEpisodeIE(InfoExtractor):
@@ -72,7 +125,7 @@ class IskEpisodeIE(InfoExtractor):
 
         video_duration = self._extract_m3u8_vod_duration(formats[0]['url'], video_id)
 
-        result_id = 'too-short' if video_duration < _MIN_DURATION_SECONDS else video_id
+        result_id = _resolve_result_id(video_id, video_duration)
 
         return {
             'id': result_id,
@@ -80,6 +133,7 @@ class IskEpisodeIE(InfoExtractor):
             'series': series,
             'season_number': int(season_num),
             'episode_number': int(episode_num),
+            'duration': video_duration,
             'formats': formats,
         }
 
