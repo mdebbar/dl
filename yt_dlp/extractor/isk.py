@@ -8,10 +8,12 @@ import time
 from .common import InfoExtractor
 from ..utils import (
     ExtractorError,
+    locked_file,
+    make_archive_id,
 )
 
 # TODO: Don't hardcode the `/app/downloads/` path
-DOWNLOADS_PATH = '/app/downloads'
+DOWNLOADS_PATH = os.environ.get('DOWNLOADS_PATH', '/app/downloads')
 WATCH_LABEL = 'مشاهدة الحلقة'
 
 _HOSTS = '|'.join([
@@ -38,7 +40,7 @@ _HOME_URL_RE = rf'{_DOMAIN_RE}/?$'
 #  - durations below this are rejected outright (ads/error pages, never a real episode)
 _JUNK_DURATION_SECONDS = 15 * 60
 #  - durations at or above this are trusted immediately, no waiting
-_FAST_ACCEPT_DURATION_SECONDS = 100 * 60
+_FAST_ACCEPT_DURATION_SECONDS = 120 * 60
 #  - anything in between is only accepted once the *same* duration has been seen on two
 #    separate extractions spaced at least this far apart (i.e. it has stopped growing)
 _STABILITY_WINDOW_SECONDS = 30 * 60
@@ -48,10 +50,42 @@ _STABILITY_WINDOW_SECONDS = 30 * 60
 # on a later run instead of treating it as done.
 _PENDING_ID = 'too-short'
 
+# Episodes accepted with duration below this are candidate partial uploads and will be re-probed
+# on subsequent cron runs for up to _RECHECK_WINDOW_SECONDS to detect if the full episode arrives.
+_SUSPICIOUS_SHORT_DURATION_SECONDS = 120 * 60  # 120 minutes
+_RECHECK_WINDOW_SECONDS = 48 * 3600  # 48 hours
+
+# Retention and rotation to prevent long-term bloating
+_STATE_RETENTION_SECONDS = 30 * 86400  # 30 days
+_MAX_LOG_BYTES = 5 * 1024 * 1024  # 5 MB
+
 _DURATION_STATE_PATH = f'{DOWNLOADS_PATH}/.isk_duration_state.json'
+_LOG_FILE_PATH = f'{DOWNLOADS_PATH}/isk_duration.log'
 
 _FIREFOX_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
 # _CHROME_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+
+def _format_duration(seconds):
+    if seconds is None:
+        return 'unknown'
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f'{hours}h {minutes:02d}m {secs:02d}s'
+    return f'{minutes}m {secs:02d}s'
+
+
+def _format_elapsed(seconds):
+    if seconds is None:
+        return 'unknown'
+    seconds = int(max(0, seconds))
+    minutes, secs = divmod(seconds, 60)
+    if minutes >= 60:
+        hours, mins = divmod(minutes, 60)
+        return f'{hours}h {mins:02d}m {secs:02d}s'
+    return f'{minutes}m {secs:02d}s'
 
 
 def _get_series_name(url):
@@ -61,44 +95,274 @@ def _get_series_name(url):
     return string.capwords(series.replace('-', ' '))
 
 
-def _is_duration_stable(video_id, duration):
-    """True once `duration` has stopped growing for this episode across separate runs."""
-    os.makedirs(os.path.dirname(_DURATION_STATE_PATH), exist_ok=True)
+def _needs_duration_recheck(video_id):
+    """True if this episode was recently accepted with a short duration and should be re-probed."""
+    if not os.path.exists(_DURATION_STATE_PATH):
+        return False
+    try:
+        with open(_DURATION_STATE_PATH, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+        entry = state.get(video_id)
+        if not isinstance(entry, dict):
+            return False
+        if entry.get('status') not in ('accepted_stable', 'accepted_fast'):
+            return False
+        accepted_dur = entry.get('accepted_duration') or 0
+        if accepted_dur >= _SUSPICIOUS_SHORT_DURATION_SECONDS:
+            return False
+        now = time.time()
+        accepted_at = entry.get('accepted_at') or entry.get('last_seen') or 0
+        return (now - accepted_at) < _RECHECK_WINDOW_SECONDS
+    except Exception:
+        return False
+
+
+def _unarchive_video(downloader, video_id):
+    """Remove video from in-memory archive and downloaded.txt file so yt-dlp re-downloads it."""
+    archive_id = make_archive_id(IskEpisodeIE, video_id)
+    if getattr(downloader, 'archive', None) is not None:
+        downloader.archive.discard(archive_id)
+
+    archive_file = downloader.params.get('download_archive')
+    if archive_file and os.path.isfile(archive_file):
+        try:
+            with locked_file(archive_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            new_lines = [l for l in lines if l.strip() != archive_id]
+            if len(new_lines) != len(lines):
+                with locked_file(archive_file, 'w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+        except OSError:
+            pass
+
+
+def _evaluate_and_record_duration(
+    video_id,
+    duration,
+    *,
+    title=None,
+    series=None,
+    webpage_url=None,
+    m3u8_url=None,
+    log_func=None,
+    warn_func=None,
+    downloader=None,
+):
+    """Evaluate duration stability and persist full audit trail in state and log files."""
+    now = time.time()
+    now_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))
+
+    state_dir = os.path.dirname(_DURATION_STATE_PATH)
+    if state_dir:
+        os.makedirs(state_dir, exist_ok=True)
+
     with open(_DURATION_STATE_PATH, 'a+') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)
         try:
             state = json.load(f)
-        except json.JSONDecodeError:
+            if not isinstance(state, dict):
+                state = {}
+        except (json.JSONDecodeError, OSError):
             state = {}
 
-        now = time.time()
         entry = state.get(video_id)
-        stable = bool(entry) and entry['duration'] == duration \
-            and (now - entry['first_seen']) >= _STABILITY_WINDOW_SECONDS
+        if not isinstance(entry, dict):
+            entry = None
 
-        if stable:
-            state.pop(video_id, None)
-        elif not entry or entry['duration'] != duration:
-            state[video_id] = {'duration': duration, 'first_seen': now}
+        if duration is None:
+            status = 'rejected_no_duration'
+            result_id = _PENDING_ID
+            reason = 'VOD manifest duration could not be extracted (missing #EXT-X-ENDLIST or empty manifest)'
+        elif entry and entry.get('status') in ('accepted_fast', 'accepted_stable'):
+            status = entry['status']
+            result_id = video_id
+            accepted_dur = entry.get('accepted_duration')
+            if accepted_dur is not None and duration is not None and duration > accepted_dur:
+                status = 'accepted_fast' if duration >= _FAST_ACCEPT_DURATION_SECONDS else 'accepted_stable'
+                reason = (
+                    f'Duration updated from {accepted_dur}s ({_format_duration(accepted_dur)}) to '
+                    f'{duration}s ({_format_duration(duration)}); triggering re-download'
+                )
+                entry['accepted_duration'] = duration
+                entry['accepted_duration_str'] = _format_duration(duration)
+                entry['accepted_at'] = now
+                entry['accepted_at_iso'] = now_iso
+                entry['accepted_status'] = status
+                entry['duration_changed_after_acceptance'] = True
+                entry['post_acceptance_warning'] = reason
+                if downloader:
+                    _unarchive_video(downloader, video_id)
+                    downloader.params['overwrites'] = True
+            elif accepted_dur is not None and accepted_dur != duration:
+                reason = (
+                    f'Previously accepted ({status}) at {entry.get("accepted_at_iso")} with duration '
+                    f'{accepted_dur}s ({_format_duration(accepted_dur)}), but duration is now '
+                    f'{duration}s ({_format_duration(duration)})'
+                )
+            else:
+                reason = f'Already accepted ({status}) at {entry.get("accepted_at_iso")}'
+        elif duration < _JUNK_DURATION_SECONDS:
+            status = 'rejected_junk'
+            result_id = _PENDING_ID
+            reason = (
+                f'Duration {duration}s ({_format_duration(duration)}) < '
+                f'{_JUNK_DURATION_SECONDS}s junk threshold; rejected'
+            )
+        elif duration >= _FAST_ACCEPT_DURATION_SECONDS:
+            status = 'accepted_fast'
+            result_id = video_id
+            reason = (
+                f'Duration {duration}s ({_format_duration(duration)}) >= '
+                f'{_FAST_ACCEPT_DURATION_SECONDS}s fast-accept threshold; accepted immediately'
+            )
+        else:
+            # Ambiguous range: stability window check
+            if not entry:
+                status = 'pending'
+                result_id = _PENDING_ID
+                reason = (
+                    f'First observation at {duration}s ({_format_duration(duration)}); stability timer started '
+                    f'(requires {_format_elapsed(_STABILITY_WINDOW_SECONDS)} unchanged)'
+                )
+            elif entry.get('last_duration') != duration:
+                old_dur = entry.get('last_duration')
+                status = 'pending'
+                result_id = _PENDING_ID
+                reason = (
+                    f'Duration changed from {old_dur}s ({_format_duration(old_dur)}) to {duration}s '
+                    f'({_format_duration(duration)}); stability timer reset'
+                )
+            else:
+                first_seen = entry.get('first_seen', now)
+                elapsed = now - first_seen
+                if elapsed >= _STABILITY_WINDOW_SECONDS:
+                    status = 'accepted_stable'
+                    result_id = video_id
+                    reason = (
+                        f'Duration {duration}s ({_format_duration(duration)}) remained stable for '
+                        f'{_format_elapsed(elapsed)} (>= {_format_elapsed(_STABILITY_WINDOW_SECONDS)} window); accepted'
+                    )
+                else:
+                    status = 'pending'
+                    result_id = _PENDING_ID
+                    reason = (
+                        f'Duration {duration}s ({_format_duration(duration)}) unchanged, but elapsed '
+                        f'{_format_elapsed(elapsed)} < {_format_elapsed(_STABILITY_WINDOW_SECONDS)} window; pending'
+                    )
+
+        if entry is None:
+            entry = {
+                'video_id': video_id,
+                'first_seen': now,
+                'first_seen_iso': now_iso,
+                'checks_count': 0,
+                'history': [],
+            }
+
+        # Reset stability timer if pending and duration changed
+        if status == 'pending' and entry.get('last_duration') != duration:
+            entry['first_seen'] = now
+            entry['first_seen_iso'] = now_iso
+
+        # Mark acceptance details when transitioning to accepted
+        if status in ('accepted_fast', 'accepted_stable') and not entry.get('accepted_at'):
+            entry['accepted_at'] = now
+            entry['accepted_at_iso'] = now_iso
+            entry['accepted_duration'] = duration
+            entry['accepted_duration_str'] = _format_duration(duration)
+            entry['accepted_status'] = status
+            entry['accepted_reason'] = reason
+
+        # Anomaly detection: duration changed after acceptance
+        if entry.get('accepted_at') and entry.get('accepted_duration') != duration:
+            entry['duration_changed_after_acceptance'] = True
+            entry['post_acceptance_warning'] = reason
+
+        if title:
+            entry['title'] = title
+        if series:
+            entry['series'] = series
+        if webpage_url:
+            entry['webpage_url'] = webpage_url
+
+        entry['last_seen'] = now
+        entry['last_seen_iso'] = now_iso
+        entry['last_duration'] = duration
+        entry['last_duration_str'] = _format_duration(duration)
+        entry['status'] = status
+        entry['last_status_reason'] = reason
+        entry['last_result_id'] = result_id
+        entry['checks_count'] = entry.get('checks_count', 0) + 1
+
+        history_item = {
+            'timestamp': now,
+            'timestamp_iso': now_iso,
+            'duration': duration,
+            'duration_str': _format_duration(duration),
+            'status': status,
+            'result_id': result_id,
+            'reason': reason,
+            'm3u8_url': m3u8_url,
+        }
+        history = entry.get('history')
+        if not isinstance(history, list):
+            history = []
+        history.append(history_item)
+        entry['history'] = history[-50:]
+
+        state[video_id] = entry
+
+        # Prune entries older than 30 days
+        cutoff = now - _STATE_RETENTION_SECONDS
+        state = {
+            k: v for k, v in state.items()
+            if isinstance(v, dict) and v.get('last_seen', now) >= cutoff
+        }
 
         f.seek(0)
         f.truncate()
-        json.dump(state, f)
+        json.dump(state, f, indent=2)
 
-    return stable
+    try:
+        if os.path.exists(_LOG_FILE_PATH) and os.path.getsize(_LOG_FILE_PATH) >= _MAX_LOG_BYTES:
+            rotated_path = f'{_LOG_FILE_PATH}.1'
+            if os.path.exists(rotated_path):
+                os.remove(rotated_path)
+            os.replace(_LOG_FILE_PATH, rotated_path)
 
+        with open(_LOG_FILE_PATH, 'a', encoding='utf-8') as log_f:
+            log_f.write(
+                f'{now_iso} | [{status.upper()}] {video_id} | '
+                f'duration={_format_duration(duration)} ({duration}s) | '
+                f'checks={entry["checks_count"]} | '
+                f'{reason}\n'
+            )
+    except OSError:
+        pass
 
-def _resolve_result_id(video_id, duration):
-    if duration < _JUNK_DURATION_SECONDS:
-        return _PENDING_ID
-    if duration >= _FAST_ACCEPT_DURATION_SECONDS:
-        return video_id
-    return video_id if _is_duration_stable(video_id, duration) else _PENDING_ID
+    if log_func:
+        log_func(f'{video_id}: duration={_format_duration(duration)} ({duration}s), status={status} - {reason}')
+    if warn_func and entry.get('duration_changed_after_acceptance'):
+        warn_func(f'{video_id}: {entry["post_acceptance_warning"]}')
+
+    return result_id
 
 
 class IskEpisodeIE(InfoExtractor):
     _VALID_URL = _EPISODE_URL_RE
+
+    @classmethod
+    def get_temp_id(cls, url):
+        try:
+            video_id = cls._match_id(url)
+        except (IndexError, AttributeError):
+            return None
+        if _needs_duration_recheck(video_id):
+            # Bypass early download-archive check to allow _real_extract to check
+            # if 3isk updated this suspiciously short episode with a longer version.
+            return None
+        return video_id
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
@@ -125,7 +389,17 @@ class IskEpisodeIE(InfoExtractor):
 
         video_duration = self._extract_m3u8_vod_duration(formats[0]['url'], video_id)
 
-        result_id = _resolve_result_id(video_id, video_duration)
+        result_id = _evaluate_and_record_duration(
+            video_id=video_id,
+            duration=video_duration,
+            title=title,
+            series=series,
+            webpage_url=url,
+            m3u8_url=formats[0]['url'] if formats else None,
+            log_func=self.to_screen,
+            warn_func=self.report_warning,
+            downloader=self._downloader,
+        )
 
         return {
             'id': result_id,
