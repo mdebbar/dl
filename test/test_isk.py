@@ -40,7 +40,7 @@ class TestIskDurationState(unittest.TestCase):
         try:
             isk.time.time = lambda: t0
 
-            # Check 1: first observation
+            # Check 1: first observation -> is_pending is True
             res1 = isk._evaluate_and_record_duration(
                 vid,
                 duration=2700,
@@ -49,13 +49,14 @@ class TestIskDurationState(unittest.TestCase):
                 webpage_url='https://3isk.biz/watch/episodes/serie-foo-season-01-episode-01',
                 m3u8_url='https://cdn.example.com/stream.m3u8',
             )
-            self.assertEqual(res1, isk._PENDING_ID)
+            self.assertTrue(res1)
 
             with open(isk._DURATION_STATE_PATH) as f:
                 state = json.load(f)
             self.assertIn(vid, state)
             entry = state[vid]
             self.assertEqual(entry['status'], 'pending')
+            self.assertTrue(entry['is_pending'])
             self.assertEqual(entry['checks_count'], 1)
             self.assertEqual(entry['last_duration'], 2700)
             self.assertEqual(len(entry['history']), 1)
@@ -64,25 +65,27 @@ class TestIskDurationState(unittest.TestCase):
             # Check 2: 15 minutes later, duration unchanged -> still pending
             isk.time.time = lambda: t0 + 900
             res2 = isk._evaluate_and_record_duration(vid, duration=2700)
-            self.assertEqual(res2, isk._PENDING_ID)
+            self.assertTrue(res2)
 
             with open(isk._DURATION_STATE_PATH) as f:
                 state = json.load(f)
             entry = state[vid]
             self.assertEqual(entry['status'], 'pending')
+            self.assertTrue(entry['is_pending'])
             self.assertEqual(entry['checks_count'], 2)
             self.assertEqual(len(entry['history']), 2)
 
             # Check 3: 35 minutes after first_seen, duration unchanged -> accepted_stable
             isk.time.time = lambda: t0 + 2100
             res3 = isk._evaluate_and_record_duration(vid, duration=2700)
-            self.assertEqual(res3, vid)
+            self.assertFalse(res3)
 
             with open(isk._DURATION_STATE_PATH) as f:
                 state = json.load(f)
             entry = state[vid]
             # Key must NOT be deleted
             self.assertEqual(entry['status'], 'accepted_stable')
+            self.assertFalse(entry['is_pending'])
             self.assertEqual(entry['accepted_duration'], 2700)
             self.assertEqual(entry['accepted_status'], 'accepted_stable')
             self.assertEqual(entry['accepted_at'], t0 + 2100)
@@ -97,7 +100,7 @@ class TestIskDurationState(unittest.TestCase):
                 duration=7800,
                 warn_func=warnings.append,
             )
-            self.assertEqual(res4, vid)
+            self.assertFalse(res4)
 
             with open(isk._DURATION_STATE_PATH) as f:
                 state = json.load(f)
@@ -127,12 +130,12 @@ class TestIskDurationState(unittest.TestCase):
         try:
             isk.time.time = lambda: t0
             res1 = isk._evaluate_and_record_duration(vid, duration=1800)
-            self.assertEqual(res1, isk._PENDING_ID)
+            self.assertTrue(res1)
 
             # 20 minutes later, duration increases from 1800 to 2400
             isk.time.time = lambda: t0 + 1200
             res2 = isk._evaluate_and_record_duration(vid, duration=2400)
-            self.assertEqual(res2, isk._PENDING_ID)
+            self.assertTrue(res2)
 
             with open(isk._DURATION_STATE_PATH) as f:
                 state = json.load(f)
@@ -142,16 +145,17 @@ class TestIskDurationState(unittest.TestCase):
             # 25 minutes after reset (t0 + 2700), still under 30m window
             isk.time.time = lambda: t0 + 2700
             res3 = isk._evaluate_and_record_duration(vid, duration=2400)
-            self.assertEqual(res3, isk._PENDING_ID)
+            self.assertTrue(res3)
 
             # 35 minutes after reset (t0 + 3300), now stable
             isk.time.time = lambda: t0 + 3300
             res4 = isk._evaluate_and_record_duration(vid, duration=2400)
-            self.assertEqual(res4, vid)
+            self.assertFalse(res4)
 
             with open(isk._DURATION_STATE_PATH) as f:
                 state = json.load(f)
             self.assertEqual(state[vid]['status'], 'accepted_stable')
+            self.assertFalse(state[vid]['is_pending'])
             self.assertEqual(state[vid]['accepted_duration'], 2400)
         finally:
             isk.time.time = orig_time
@@ -159,35 +163,38 @@ class TestIskDurationState(unittest.TestCase):
     def test_fast_accept(self):
         vid = 'serie-baz-season-01-episode-03'
         res = isk._evaluate_and_record_duration(vid, duration=7500)
-        self.assertEqual(res, vid)
+        self.assertFalse(res)
 
         with open(isk._DURATION_STATE_PATH) as f:
             state = json.load(f)
         entry = state[vid]
         self.assertEqual(entry['status'], 'accepted_fast')
+        self.assertFalse(entry['is_pending'])
         self.assertEqual(entry['accepted_duration'], 7500)
         self.assertEqual(entry['checks_count'], 1)
 
     def test_rejected_junk(self):
         vid = 'serie-junk-season-01-episode-04'
         res = isk._evaluate_and_record_duration(vid, duration=600)
-        self.assertEqual(res, isk._PENDING_ID)
+        self.assertTrue(res)
 
         with open(isk._DURATION_STATE_PATH) as f:
             state = json.load(f)
         entry = state[vid]
         self.assertEqual(entry['status'], 'rejected_junk')
+        self.assertTrue(entry['is_pending'])
         self.assertEqual(entry['checks_count'], 1)
 
     def test_rejected_no_duration(self):
         vid = 'serie-nodur-season-01-episode-05'
         res = isk._evaluate_and_record_duration(vid, duration=None)
-        self.assertEqual(res, isk._PENDING_ID)
+        self.assertTrue(res)
 
         with open(isk._DURATION_STATE_PATH) as f:
             state = json.load(f)
         entry = state[vid]
         self.assertEqual(entry['status'], 'rejected_no_duration')
+        self.assertTrue(entry['is_pending'])
 
     def test_needs_duration_recheck_and_get_temp_id(self):
         url = 'https://3isk.biz/watch/episodes/serie-test-season-01-episode-10'
@@ -257,7 +264,7 @@ class TestIskDurationState(unittest.TestCase):
                 title='GrowSeries 01x12',
                 downloader=mock_dl,
             )
-            self.assertEqual(res, vid)
+            self.assertFalse(res)
 
             # Must be un-archived from memory and file
             self.assertNotIn(f'iskepisode {vid}', mock_dl.archive)
@@ -273,14 +280,15 @@ class TestIskDurationState(unittest.TestCase):
                 state = json.load(f)
             self.assertEqual(state[vid]['accepted_duration'], 7500)
             self.assertEqual(state[vid]['status'], 'accepted_fast')
+            self.assertFalse(state[vid]['is_pending'])
         finally:
             isk.time.time = orig_time
 
-    def test_state_pruning_30_days(self):
+    def test_cleanup_state_and_logs(self):
         t0 = 1700000000.0
         orig_time = isk.time.time
         try:
-            # Seed state file with old entry (35 days old) and recent entry (10 days old)
+            # 1. Test 30-day state pruning
             old_entry = {
                 'video_id': 'old-ep',
                 'status': 'accepted_fast',
@@ -294,36 +302,59 @@ class TestIskDurationState(unittest.TestCase):
             with open(isk._DURATION_STATE_PATH, 'w') as f:
                 json.dump({'old-ep': old_entry, 'recent-ep': recent_entry}, f)
 
+            # 2. Test 5 MB log rotation
+            pad_size = isk._MAX_LOG_BYTES + 100
+            with open(isk._LOG_FILE_PATH, 'wb') as f:
+                f.write(b'x' * pad_size)
+
+            # 3. Test legacy 'too-short' removal from archive
+            archive_file = os.path.join(self.test_dir, 'downloaded.txt')
+            with open(archive_file, 'w') as f:
+                f.write('iskepisode too-short\n')
+                f.write('iskepisode valid-ep-1\n')
+
+            class MockDownloader:
+                def __init__(self):
+                    self.params = {'download_archive': archive_file}
+
             isk.time.time = lambda: t0
-            isk._evaluate_and_record_duration('new-ep', duration=7500)
+            isk._cleanup_state_and_logs(downloader=MockDownloader())
 
             with open(isk._DURATION_STATE_PATH) as f:
                 state = json.load(f)
-
             self.assertNotIn('old-ep', state)
             self.assertIn('recent-ep', state)
-            self.assertIn('new-ep', state)
+
+            rotated_path = f'{isk._LOG_FILE_PATH}.1'
+            self.assertTrue(os.path.isfile(rotated_path))
+            self.assertEqual(os.path.getsize(rotated_path), pad_size)
+            self.assertFalse(os.path.exists(isk._LOG_FILE_PATH))
+
+            with open(archive_file) as f:
+                archive_lines = f.read().splitlines()
+            self.assertNotIn('iskepisode too-short', archive_lines)
+            self.assertIn('iskepisode valid-ep-1', archive_lines)
         finally:
             isk.time.time = orig_time
 
-    def test_log_rotation_5mb(self):
-        # Create log file slightly larger than 5 MB
-        pad_size = isk._MAX_LOG_BYTES + 100
-        with open(isk._LOG_FILE_PATH, 'wb') as f:
-            f.write(b'x' * pad_size)
+    def test_match_filter_integration(self):
+        from yt_dlp.utils import match_filter_func
 
-        isk._evaluate_and_record_duration('rotate-ep', duration=7500)
+        mf = match_filter_func(['!is_pending'])
 
-        # Main log file was rotated to .1 and new file started
-        rotated_path = f'{isk._LOG_FILE_PATH}.1'
-        self.assertTrue(os.path.isfile(rotated_path))
-        self.assertEqual(os.path.getsize(rotated_path), pad_size)
+        pending_info = {'id': 'ep-pending', 'title': 'Ep Pending', 'is_pending': True}
+        accepted_info = {'id': 'ep-accepted', 'title': 'Ep Accepted', 'is_pending': False}
+        other_info = {'id': 'ep-other', 'title': 'Ep Other'}
 
-        self.assertTrue(os.path.isfile(isk._LOG_FILE_PATH))
-        self.assertLess(os.path.getsize(isk._LOG_FILE_PATH), 1024)
-        with open(isk._LOG_FILE_PATH, 'r') as f:
-            content = f.read()
-        self.assertIn('rotate-ep', content)
+        # Pending episode is rejected by the filter
+        self.assertIsNotNone(mf(pending_info))
+        self.assertIn('does not pass filter', mf(pending_info))
+
+        # Accepted episode passes
+        self.assertIsNone(mf(accepted_info))
+
+        # Other extractors without is_pending pass
+        self.assertIsNone(mf(other_info))
 
 
 if __name__ == '__main__':

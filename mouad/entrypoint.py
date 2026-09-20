@@ -68,13 +68,13 @@ def isk_cmd(args):
         series = string.capwords(mobj.group('series').replace('-', ' '))
         season = mobj.group('season').zfill(2)
         episode = mobj.group('episode').zfill(2)
-        ydl.extract_info(url, extra_info={
+        info = ydl.extract_info(url, extra_info={
             'id': episode_id,
             'series': series,
             'season': season,
             'episode': episode,
         })
-        if ydl._download_retcode == 0:
+        if ydl._download_retcode == 0 and info and not info.get('is_pending'):
             with open('/app/downloads/downloaded.txt', 'a') as f:
                 f.write(f'iskepisode {episode_id}\n')
         return ydl._download_retcode

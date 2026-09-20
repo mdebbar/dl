@@ -45,11 +45,6 @@ _FAST_ACCEPT_DURATION_SECONDS = 120 * 60
 #    separate extractions spaced at least this far apart (i.e. it has stopped growing)
 _STABILITY_WINDOW_SECONDS = 30 * 60
 
-# Sentinel id returned for a video that isn't confirmed complete yet. Keeping this out of
-# `downloaded.txt` (rather than the real video id) is what makes --download-archive retry it
-# on a later run instead of treating it as done.
-_PENDING_ID = 'too-short'
-
 # Episodes accepted with duration below this are candidate partial uploads and will be re-probed
 # on subsequent cron runs for up to _RECHECK_WINDOW_SECONDS to detect if the full episode arrives.
 _SUSPICIOUS_SHORT_DURATION_SECONDS = 120 * 60  # 120 minutes
@@ -136,6 +131,59 @@ def _unarchive_video(downloader, video_id):
             pass
 
 
+def _cleanup_state_and_logs(*, downloader=None):
+    """Prune state entries older than 30 days, rotate logs if exceeding 5 MB, and clean legacy sentinels."""
+    now = time.time()
+    cutoff = now - _STATE_RETENTION_SECONDS
+
+    # 1. State pruning
+    if os.path.exists(_DURATION_STATE_PATH):
+        try:
+            with open(_DURATION_STATE_PATH, 'a+') as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.seek(0)
+                try:
+                    state = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    state = {}
+
+                if isinstance(state, dict):
+                    orig_len = len(state)
+                    pruned_state = {
+                        k: v for k, v in state.items()
+                        if isinstance(v, dict) and v.get('last_seen', now) >= cutoff
+                    }
+                    if len(pruned_state) != orig_len:
+                        f.seek(0)
+                        f.truncate()
+                        json.dump(pruned_state, f, indent=2)
+        except OSError:
+            pass
+
+    # 2. Log rotation
+    try:
+        if os.path.exists(_LOG_FILE_PATH) and os.path.getsize(_LOG_FILE_PATH) >= _MAX_LOG_BYTES:
+            rotated_path = f'{_LOG_FILE_PATH}.1'
+            if os.path.exists(rotated_path):
+                os.remove(rotated_path)
+            os.replace(_LOG_FILE_PATH, rotated_path)
+    except OSError:
+        pass
+
+    # 3. Clean legacy 'too-short' sentinel from archive file if present
+    archive_file = (downloader.params.get('download_archive') if downloader else None) or f'{DOWNLOADS_PATH}/downloaded.txt'
+    if archive_file and os.path.isfile(archive_file):
+        try:
+            with locked_file(archive_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            new_lines = [l for l in lines if l.strip() != 'iskepisode too-short']
+            if len(new_lines) != len(lines):
+                with locked_file(archive_file, 'w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+        except OSError:
+            pass
+
+
 def _evaluate_and_record_duration(
     video_id,
     duration,
@@ -172,11 +220,9 @@ def _evaluate_and_record_duration(
 
         if duration is None:
             status = 'rejected_no_duration'
-            result_id = _PENDING_ID
             reason = 'VOD manifest duration could not be extracted (missing #EXT-X-ENDLIST or empty manifest)'
         elif entry and entry.get('status') in ('accepted_fast', 'accepted_stable'):
             status = entry['status']
-            result_id = video_id
             accepted_dur = entry.get('accepted_duration')
             if accepted_dur is not None and duration is not None and duration > accepted_dur:
                 status = 'accepted_fast' if duration >= _FAST_ACCEPT_DURATION_SECONDS else 'accepted_stable'
@@ -204,14 +250,12 @@ def _evaluate_and_record_duration(
                 reason = f'Already accepted ({status}) at {entry.get("accepted_at_iso")}'
         elif duration < _JUNK_DURATION_SECONDS:
             status = 'rejected_junk'
-            result_id = _PENDING_ID
             reason = (
                 f'Duration {duration}s ({_format_duration(duration)}) < '
                 f'{_JUNK_DURATION_SECONDS}s junk threshold; rejected'
             )
         elif duration >= _FAST_ACCEPT_DURATION_SECONDS:
             status = 'accepted_fast'
-            result_id = video_id
             reason = (
                 f'Duration {duration}s ({_format_duration(duration)}) >= '
                 f'{_FAST_ACCEPT_DURATION_SECONDS}s fast-accept threshold; accepted immediately'
@@ -220,7 +264,6 @@ def _evaluate_and_record_duration(
             # Ambiguous range: stability window check
             if not entry:
                 status = 'pending'
-                result_id = _PENDING_ID
                 reason = (
                     f'First observation at {duration}s ({_format_duration(duration)}); stability timer started '
                     f'(requires {_format_elapsed(_STABILITY_WINDOW_SECONDS)} unchanged)'
@@ -228,7 +271,6 @@ def _evaluate_and_record_duration(
             elif entry.get('last_duration') != duration:
                 old_dur = entry.get('last_duration')
                 status = 'pending'
-                result_id = _PENDING_ID
                 reason = (
                     f'Duration changed from {old_dur}s ({_format_duration(old_dur)}) to {duration}s '
                     f'({_format_duration(duration)}); stability timer reset'
@@ -238,18 +280,18 @@ def _evaluate_and_record_duration(
                 elapsed = now - first_seen
                 if elapsed >= _STABILITY_WINDOW_SECONDS:
                     status = 'accepted_stable'
-                    result_id = video_id
                     reason = (
                         f'Duration {duration}s ({_format_duration(duration)}) remained stable for '
                         f'{_format_elapsed(elapsed)} (>= {_format_elapsed(_STABILITY_WINDOW_SECONDS)} window); accepted'
                     )
                 else:
                     status = 'pending'
-                    result_id = _PENDING_ID
                     reason = (
                         f'Duration {duration}s ({_format_duration(duration)}) unchanged, but elapsed '
                         f'{_format_elapsed(elapsed)} < {_format_elapsed(_STABILITY_WINDOW_SECONDS)} window; pending'
                     )
+
+        is_pending = status in ('pending', 'rejected_junk', 'rejected_no_duration')
 
         if entry is None:
             entry = {
@@ -291,8 +333,8 @@ def _evaluate_and_record_duration(
         entry['last_duration'] = duration
         entry['last_duration_str'] = _format_duration(duration)
         entry['status'] = status
+        entry['is_pending'] = is_pending
         entry['last_status_reason'] = reason
-        entry['last_result_id'] = result_id
         entry['checks_count'] = entry.get('checks_count', 0) + 1
 
         history_item = {
@@ -301,7 +343,7 @@ def _evaluate_and_record_duration(
             'duration': duration,
             'duration_str': _format_duration(duration),
             'status': status,
-            'result_id': result_id,
+            'is_pending': is_pending,
             'reason': reason,
             'm3u8_url': m3u8_url,
         }
@@ -313,24 +355,11 @@ def _evaluate_and_record_duration(
 
         state[video_id] = entry
 
-        # Prune entries older than 30 days
-        cutoff = now - _STATE_RETENTION_SECONDS
-        state = {
-            k: v for k, v in state.items()
-            if isinstance(v, dict) and v.get('last_seen', now) >= cutoff
-        }
-
         f.seek(0)
         f.truncate()
         json.dump(state, f, indent=2)
 
     try:
-        if os.path.exists(_LOG_FILE_PATH) and os.path.getsize(_LOG_FILE_PATH) >= _MAX_LOG_BYTES:
-            rotated_path = f'{_LOG_FILE_PATH}.1'
-            if os.path.exists(rotated_path):
-                os.remove(rotated_path)
-            os.replace(_LOG_FILE_PATH, rotated_path)
-
         with open(_LOG_FILE_PATH, 'a', encoding='utf-8') as log_f:
             log_f.write(
                 f'{now_iso} | [{status.upper()}] {video_id} | '
@@ -346,7 +375,7 @@ def _evaluate_and_record_duration(
     if warn_func and entry.get('duration_changed_after_acceptance'):
         warn_func(f'{video_id}: {entry["post_acceptance_warning"]}')
 
-    return result_id
+    return is_pending
 
 
 class IskEpisodeIE(InfoExtractor):
@@ -389,7 +418,7 @@ class IskEpisodeIE(InfoExtractor):
 
         video_duration = self._extract_m3u8_vod_duration(formats[0]['url'], video_id)
 
-        result_id = _evaluate_and_record_duration(
+        is_pending = _evaluate_and_record_duration(
             video_id=video_id,
             duration=video_duration,
             title=title,
@@ -402,13 +431,14 @@ class IskEpisodeIE(InfoExtractor):
         )
 
         return {
-            'id': result_id,
+            'id': video_id,
             'title': title,
             'series': series,
             'season_number': int(season_num),
             'episode_number': int(episode_num),
             'duration': video_duration,
             'formats': formats,
+            'is_pending': is_pending,
         }
 
     def _extract_with_playwright(self, url, video_id):
@@ -493,6 +523,8 @@ class IskHomeIE(InfoExtractor):
     _VALID_URL = _HOME_URL_RE
 
     def _real_extract(self, url):
+        _cleanup_state_and_logs(downloader=self._downloader)
+
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
