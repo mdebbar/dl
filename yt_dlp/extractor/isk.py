@@ -8,7 +8,6 @@ import time
 from .common import InfoExtractor
 from ..utils import (
     ExtractorError,
-    locked_file,
     make_archive_id,
 )
 
@@ -34,20 +33,23 @@ _EPISODE_URL_RE = rf'{_DOMAIN_RE}/watch/episodes/(?P<id>{_EPISODE_ID_RE})'
 
 _HOME_URL_RE = rf'{_DOMAIN_RE}/?$'
 
+# Baseline broadcast duration for complete Turkish drama episodes
+_FULL_EPISODE_MIN_DURATION_SECONDS = 120 * 60
+
 # 3isk sometimes publishes a short partial video before swapping in the full episode some time
 # later. A fixed duration cutoff can't tell "genuinely short episode" apart from "still
 # uploading", so instead:
 #  - durations below this are rejected outright (ads/error pages, never a real episode)
 _JUNK_DURATION_SECONDS = 15 * 60
 #  - durations at or above this are trusted immediately, no waiting
-_FAST_ACCEPT_DURATION_SECONDS = 120 * 60
+_FAST_ACCEPT_DURATION_SECONDS = _FULL_EPISODE_MIN_DURATION_SECONDS
 #  - anything in between is only accepted once the *same* duration has been seen on two
 #    separate extractions spaced at least this far apart (i.e. it has stopped growing)
 _STABILITY_WINDOW_SECONDS = 30 * 60
 
 # Episodes accepted with duration below this are candidate partial uploads and will be re-probed
 # on subsequent cron runs for up to _RECHECK_WINDOW_SECONDS to detect if the full episode arrives.
-_SUSPICIOUS_SHORT_DURATION_SECONDS = 120 * 60  # 120 minutes
+_SUSPICIOUS_SHORT_DURATION_SECONDS = _FULL_EPISODE_MIN_DURATION_SECONDS
 _RECHECK_WINDOW_SECONDS = 48 * 3600  # 48 hours
 
 # Retention and rotation to prevent long-term bloating
@@ -96,6 +98,7 @@ def _needs_duration_recheck(video_id):
         return False
     try:
         with open(_DURATION_STATE_PATH, 'r', encoding='utf-8') as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
             state = json.load(f)
         entry = state.get(video_id)
         if not isinstance(entry, dict):
@@ -112,6 +115,25 @@ def _needs_duration_recheck(video_id):
         return False
 
 
+def _remove_lines_from_archive(archive_file, lines_to_remove):
+    """Atomically remove specified lines from an archive file under an exclusive file lock."""
+    if not archive_file or not os.path.isfile(archive_file):
+        return
+    targets = set(lines_to_remove)
+    try:
+        with open(archive_file, 'r+', encoding='utf-8') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            lines = f.readlines()
+            new_lines = [l for l in lines if l.strip() not in targets]
+            if len(new_lines) != len(lines):
+                f.seek(0)
+                f.truncate()
+                f.writelines(new_lines)
+                f.flush()
+    except OSError:
+        pass
+
+
 def _unarchive_video(downloader, video_id):
     """Remove video from in-memory archive and downloaded.txt file so yt-dlp re-downloads it."""
     archive_id = make_archive_id(IskEpisodeIE, video_id)
@@ -119,16 +141,7 @@ def _unarchive_video(downloader, video_id):
         downloader.archive.discard(archive_id)
 
     archive_file = downloader.params.get('download_archive')
-    if archive_file and os.path.isfile(archive_file):
-        try:
-            with locked_file(archive_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            new_lines = [l for l in lines if l.strip() != archive_id]
-            if len(new_lines) != len(lines):
-                with locked_file(archive_file, 'w', encoding='utf-8') as f:
-                    f.writelines(new_lines)
-        except OSError:
-            pass
+    _remove_lines_from_archive(archive_file, [archive_id])
 
 
 def _cleanup_state_and_logs(*, downloader=None):
@@ -157,6 +170,7 @@ def _cleanup_state_and_logs(*, downloader=None):
                         f.seek(0)
                         f.truncate()
                         json.dump(pruned_state, f, indent=2)
+                        f.flush()
         except OSError:
             pass
 
@@ -172,16 +186,7 @@ def _cleanup_state_and_logs(*, downloader=None):
 
     # 3. Clean legacy 'too-short' sentinel from archive file if present
     archive_file = (downloader.params.get('download_archive') if downloader else None) or f'{DOWNLOADS_PATH}/downloaded.txt'
-    if archive_file and os.path.isfile(archive_file):
-        try:
-            with locked_file(archive_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            new_lines = [l for l in lines if l.strip() != 'iskepisode too-short']
-            if len(new_lines) != len(lines):
-                with locked_file(archive_file, 'w', encoding='utf-8') as f:
-                    f.writelines(new_lines)
-        except OSError:
-            pass
+    _remove_lines_from_archive(archive_file, ['iskepisode too-short'])
 
 
 def _evaluate_and_record_duration(
@@ -195,6 +200,7 @@ def _evaluate_and_record_duration(
     log_func=None,
     warn_func=None,
     downloader=None,
+    info_dict=None,
 ):
     """Evaluate duration stability and persist full audit trail in state and log files."""
     now = time.time()
@@ -239,7 +245,21 @@ def _evaluate_and_record_duration(
                 entry['post_acceptance_warning'] = reason
                 if downloader:
                     _unarchive_video(downloader, video_id)
-                    downloader.params['overwrites'] = True
+                    if hasattr(downloader, 'prepare_filename'):
+                        try:
+                            target_info = info_dict or {
+                                'id': video_id,
+                                'title': title,
+                                'series': series,
+                                'ext': 'mp4',
+                            }
+                            target_file = downloader.prepare_filename(target_info)
+                            if target_file and os.path.isfile(target_file):
+                                os.remove(target_file)
+                            if target_file and os.path.isfile(f'{target_file}.part'):
+                                os.remove(f'{target_file}.part')
+                        except Exception:
+                            pass
             elif accepted_dur is not None and accepted_dur != duration:
                 reason = (
                     f'Previously accepted ({status}) at {entry.get("accepted_at_iso")} with duration '
@@ -358,6 +378,7 @@ def _evaluate_and_record_duration(
         f.seek(0)
         f.truncate()
         json.dump(state, f, indent=2)
+        f.flush()
 
     try:
         with open(_LOG_FILE_PATH, 'a', encoding='utf-8') as log_f:
@@ -418,6 +439,17 @@ class IskEpisodeIE(InfoExtractor):
 
         video_duration = self._extract_m3u8_vod_duration(formats[0]['url'], video_id)
 
+        info_dict = {
+            'id': video_id,
+            'title': title,
+            'series': series,
+            'season_number': int(season_num),
+            'episode_number': int(episode_num),
+            'duration': video_duration,
+            'formats': formats,
+            'ext': formats[0].get('ext', 'mp4') if formats else 'mp4',
+        }
+
         is_pending = _evaluate_and_record_duration(
             video_id=video_id,
             duration=video_duration,
@@ -428,18 +460,11 @@ class IskEpisodeIE(InfoExtractor):
             log_func=self.to_screen,
             warn_func=self.report_warning,
             downloader=self._downloader,
+            info_dict=info_dict,
         )
 
-        return {
-            'id': video_id,
-            'title': title,
-            'series': series,
-            'season_number': int(season_num),
-            'episode_number': int(episode_num),
-            'duration': video_duration,
-            'formats': formats,
-            'is_pending': is_pending,
-        }
+        info_dict['is_pending'] = is_pending
+        return info_dict
 
     def _extract_with_playwright(self, url, video_id):
         try:
@@ -460,11 +485,13 @@ class IskEpisodeIE(InfoExtractor):
 
             result = {'url': None, 'headers': None}
 
+            def _is_target_m3u8(request):
+                return ('.m3u8' in request.url) and ('master.m3u8' in request.url or 'playlist.m3u8' in request.url)
+
             def handle_request(request):
-                if ('.m3u8' in request.url) and not result['url']:
-                    if 'master.m3u8' in request.url or 'playlist.m3u8' in request.url:
-                        result['url'] = request.url
-                        result['headers'] = request.headers
+                if not result['url'] and _is_target_m3u8(request):
+                    result['url'] = request.url
+                    result['headers'] = request.headers
 
             page.on('request', handle_request)
 
@@ -491,15 +518,18 @@ class IskEpisodeIE(InfoExtractor):
                 if attempts == 5:
                     raise ExtractorError('Failed to click the watch button and load the video player', expected=True)
 
-                # Now a thumbnail is shown with a play button overlay. Click the play button.
+                # Wait for the inner player iframe to load and initiate stream playback
                 inner_iframe = outer_iframe.locator('.Video').frame_locator('iframe')
                 inner_iframe.owner.wait_for(timeout=10000)
 
-                # Poll for the captured URL
-                for _ in range(30):
-                    if result['url']:
-                        break
-                    page.wait_for_timeout(1000)
+                # Wait for m3u8 request event if not already captured
+                if not result['url']:
+                    try:
+                        req = page.wait_for_event('request', predicate=_is_target_m3u8, timeout=30000)
+                        result['url'] = req.url
+                        result['headers'] = req.headers
+                    except Exception:
+                        pass
 
             except Exception as e:
                 if isinstance(e, ExtractorError):

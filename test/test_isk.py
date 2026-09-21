@@ -240,10 +240,19 @@ class TestIskDurationState(unittest.TestCase):
             f.write(f'iskepisode {vid}\n')
             f.write('iskepisode other-ep\n')
 
+        target_file = os.path.join(self.test_dir, 'GrowSeries 01x12.mp4')
+        with open(target_file, 'w') as f:
+            f.write('dummy existing video content')
+
         class MockDownloader:
             def __init__(self):
                 self.params = {'download_archive': archive_file}
                 self.archive = {f'iskepisode {vid}', 'iskepisode other-ep'}
+                self.prepared_info = None
+
+            def prepare_filename(self, info_dict):
+                self.prepared_info = info_dict
+                return target_file
 
         mock_dl = MockDownloader()
 
@@ -256,6 +265,15 @@ class TestIskDurationState(unittest.TestCase):
             isk._evaluate_and_record_duration(vid, duration=1800, series='GrowSeries', title='GrowSeries 01x12')
 
             # Recheck: duration grows to 7500s (125m)
+            full_info = {
+                'id': vid,
+                'series': 'GrowSeries',
+                'title': 'GrowSeries 01x12',
+                'season_number': 1,
+                'episode_number': 12,
+                'duration': 7500,
+                'ext': 'mp4',
+            }
             isk.time.time = lambda: t0 + 5000
             res = isk._evaluate_and_record_duration(
                 vid,
@@ -263,6 +281,7 @@ class TestIskDurationState(unittest.TestCase):
                 series='GrowSeries',
                 title='GrowSeries 01x12',
                 downloader=mock_dl,
+                info_dict=full_info,
             )
             self.assertFalse(res)
 
@@ -273,8 +292,12 @@ class TestIskDurationState(unittest.TestCase):
             self.assertNotIn(f'iskepisode {vid}', lines)
             self.assertIn('iskepisode other-ep', lines)
 
-            # Overwrites must be enabled for native yt-dlp handling
-            self.assertTrue(mock_dl.params.get('overwrites'))
+            # Target file on disk must be removed for clean re-download
+            self.assertFalse(os.path.exists(target_file))
+            self.assertEqual(mock_dl.prepared_info, full_info)
+
+            # Overwrites parameter must NOT be mutated globally
+            self.assertNotIn('overwrites', mock_dl.params)
 
             with open(isk._DURATION_STATE_PATH) as f:
                 state = json.load(f)

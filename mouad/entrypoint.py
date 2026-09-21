@@ -10,6 +10,10 @@ ARADRAMA_CONFIG = '/app/mouad/ytdlp_aradrama.conf'
 
 
 def main(args):
+    if not args:
+        print('Usage: entrypoint.py <cronjob|one|3isk|aradrama|ara> [args...]')
+        return 1
+
     cmd = args.pop(0)
 
     match cmd:
@@ -25,8 +29,8 @@ def main(args):
             return aradrama_cmd(args)
         case _:
             print(f'Unknown command: {cmd}')
-            print('Available commands: cronjob, 3isk')
-            sys.exit(1)
+            print('Available commands: cronjob, one, 3isk, aradrama, ara')
+            return 1
 
 
 def cronjob_cmd(args):
@@ -44,6 +48,9 @@ def one_cmd(args):
 
 
 def isk_cmd(args):
+    # Manually invoked with a user-supplied episode ID and a direct m3u8 stream URL.
+    # The ID and metadata cannot be inferred from raw m3u8 URLs, and the auto-generated
+    # archive ID would not match the desired episode key.
     if (len(args) != 2):
         print('The `3isk` command requires exactly two arguments: <id> <url>')
         sys.exit(1)
@@ -118,4 +125,4 @@ def aradrama_cmd(args):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    sys.exit(main(sys.argv[1:]) or 0)
