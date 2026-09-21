@@ -6,10 +6,12 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yt_dlp.extractor.isk as isk
+from test.helper import FakeYDL
 
 
 class TestIskDurationState(unittest.TestCase):
@@ -378,6 +380,245 @@ class TestIskDurationState(unittest.TestCase):
 
         # Other extractors without is_pending pass
         self.assertIsNone(mf(other_info))
+
+
+class MockPage:
+    def __init__(self):
+        self.is_closed = False
+        self.handlers = {}
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+    def goto(self, url, **kwargs):
+        pass
+
+    def get_by_text(self, text, **kwargs):
+        return MagicMock()
+
+    def frame_locator(self, selector):
+        return MagicMock()
+
+    def locator(self, selector):
+        loc = MagicMock()
+        loc.all.return_value = []
+        return loc
+
+    def wait_for_event(self, event, **kwargs):
+        req = MagicMock()
+        req.url = 'https://cdn.example.com/stream/master.m3u8'
+        req.headers = {'User-Agent': 'test'}
+        return req
+
+    def screenshot(self, **kwargs):
+        pass
+
+    def close(self):
+        self.is_closed = True
+
+
+class MockContext:
+    def __init__(self, user_agent=None):
+        self.user_agent = user_agent
+        self.is_closed = False
+        self.pages = []
+        self.listeners = {}
+
+    def new_page(self):
+        p = MockPage()
+        self.pages.append(p)
+        return p
+
+    def on(self, event, handler):
+        self.listeners[event] = handler
+
+    def close(self):
+        self.is_closed = True
+        for p in self.pages:
+            p.close()
+
+
+class MockBrowser:
+    def __init__(self):
+        self._connected = True
+        self.contexts = []
+
+    def is_connected(self):
+        return self._connected
+
+    def new_context(self, user_agent=None):
+        ctx = MockContext(user_agent=user_agent)
+        self.contexts.append(ctx)
+        return ctx
+
+    def close(self):
+        self._connected = False
+        for c in self.contexts:
+            c.close()
+
+
+class MockPlaywright:
+    def __init__(self):
+        self.firefox = MagicMock()
+        self.launch_count = 0
+        self.browsers = []
+        self.is_stopped = False
+
+        def mock_launch(**kwargs):
+            self.launch_count += 1
+            b = MockBrowser()
+            self.browsers.append(b)
+            return b
+
+        self.firefox.launch.side_effect = mock_launch
+
+    def stop(self):
+        self.is_stopped = True
+
+
+class TestPlaywrightBrowserPool(unittest.TestCase):
+    def test_lazy_initialization(self):
+        pool = isk.PlaywrightBrowserPool()
+        try:
+            state = pool._get_thread_state()
+            self.assertIsNone(state.browser)
+            self.assertIsNone(state.playwright)
+            self.assertEqual(state.use_count, 0)
+        finally:
+            pool.close_all()
+
+    def test_reuse_across_extractions(self):
+        mock_p = MockPlaywright()
+        with patch.dict(sys.modules, {'playwright.sync_api': MagicMock(sync_playwright=lambda: MagicMock(start=lambda: mock_p))}):
+            pool = isk.PlaywrightBrowserPool()
+            try:
+                # Borrow 1
+                with pool.borrow_page(user_agent='UA-1') as (ctx1, page1):
+                    self.assertFalse(ctx1.is_closed)
+                    self.assertFalse(page1.is_closed)
+                    self.assertEqual(ctx1.user_agent, 'UA-1')
+                self.assertTrue(ctx1.is_closed)
+                self.assertTrue(page1.is_closed)
+                self.assertEqual(mock_p.launch_count, 1)
+
+                # Borrow 2 (reuses existing Firefox browser)
+                with pool.borrow_page(user_agent='UA-2') as (ctx2, page2):
+                    self.assertFalse(ctx2.is_closed)
+                    self.assertFalse(page2.is_closed)
+                    self.assertEqual(ctx2.user_agent, 'UA-2')
+                    self.assertIsNot(ctx1, ctx2)
+                self.assertTrue(ctx2.is_closed)
+                self.assertTrue(page2.is_closed)
+
+                # Browser was NOT launched a second time
+                self.assertEqual(mock_p.launch_count, 1)
+                self.assertEqual(len(mock_p.browsers), 1)
+                self.assertTrue(mock_p.browsers[0].is_connected())
+            finally:
+                pool.close_all()
+                self.assertTrue(mock_p.is_stopped)
+                self.assertFalse(mock_p.browsers[0].is_connected())
+
+    def test_context_closed_on_exception(self):
+        mock_p = MockPlaywright()
+        with patch.dict(sys.modules, {'playwright.sync_api': MagicMock(sync_playwright=lambda: MagicMock(start=lambda: mock_p))}):
+            pool = isk.PlaywrightBrowserPool()
+            try:
+                with self.assertRaises(RuntimeError):
+                    with pool.borrow_page() as (ctx, page):
+                        raise RuntimeError('Extraction failed midway')
+                self.assertTrue(ctx.is_closed)
+                self.assertTrue(page.is_closed)
+                self.assertEqual(mock_p.launch_count, 1)
+                self.assertTrue(mock_p.browsers[0].is_connected())
+            finally:
+                pool.close_all()
+
+    def test_auto_recovery_on_disconnect(self):
+        mock_p = MockPlaywright()
+        with patch.dict(sys.modules, {'playwright.sync_api': MagicMock(sync_playwright=lambda: MagicMock(start=lambda: mock_p))}):
+            pool = isk.PlaywrightBrowserPool()
+            try:
+                with pool.borrow_page():
+                    pass
+                self.assertEqual(mock_p.launch_count, 1)
+
+                # Simulate browser crash / disconnect
+                mock_p.browsers[0]._connected = False
+
+                # Subsequent borrow automatically re-launches browser
+                with pool.borrow_page():
+                    pass
+                self.assertEqual(mock_p.launch_count, 2)
+                self.assertEqual(len(mock_p.browsers), 2)
+                self.assertTrue(mock_p.browsers[1].is_connected())
+            finally:
+                pool.close_all()
+
+    def test_max_uses_recycling(self):
+        mock_p = MockPlaywright()
+        with patch.dict(sys.modules, {'playwright.sync_api': MagicMock(sync_playwright=lambda: MagicMock(start=lambda: mock_p))}):
+            pool = isk.PlaywrightBrowserPool(max_uses=2)
+            try:
+                with pool.borrow_page():
+                    pass
+                self.assertEqual(mock_p.launch_count, 1)
+
+                with pool.borrow_page():
+                    pass
+                self.assertEqual(mock_p.launch_count, 1)
+
+                # Third borrow exceeds max_uses=2, triggers fresh launch
+                with pool.borrow_page():
+                    pass
+                self.assertEqual(mock_p.launch_count, 2)
+            finally:
+                pool.close_all()
+
+    def test_missing_playwright_raises_extractor_error(self):
+        with patch.dict(sys.modules, {'playwright': None, 'playwright.sync_api': None}):
+            pool = isk.PlaywrightBrowserPool()
+            try:
+                with self.assertRaises(isk.ExtractorError) as cm:
+                    pool.get_browser()
+                self.assertTrue(cm.exception.expected)
+                self.assertIn('playwright is not installed', str(cm.exception))
+            finally:
+                pool.close_all()
+
+    def test_integration_browser_reuse_across_home_and_episodes(self):
+        mock_p = MockPlaywright()
+        with patch.dict(sys.modules, {'playwright.sync_api': MagicMock(sync_playwright=lambda: MagicMock(start=lambda: mock_p))}):
+            orig_pool = isk._BROWSER_POOL
+            test_pool = isk.PlaywrightBrowserPool()
+            isk._BROWSER_POOL = test_pool
+            try:
+                ydl = FakeYDL()
+                # 1. Home page extraction
+                home_ie = isk.IskHomeIE(ydl)
+                with patch.object(isk.IskHomeIE, 'playlist_result', return_value={'_type': 'playlist', 'entries': []}):
+                    home_ie._real_extract('https://3isk.biz/')
+                self.assertEqual(mock_p.launch_count, 1)
+
+                # 2. Episode 1 extraction
+                ep_ie = isk.IskEpisodeIE(ydl)
+                with patch.object(isk.IskEpisodeIE, '_extract_m3u8_formats', return_value=[{'url': 'https://cdn.example.com/master.m3u8', 'ext': 'mp4'}]):
+                    with patch.object(isk.IskEpisodeIE, '_extract_m3u8_vod_duration', return_value=7500):
+                        info1 = ep_ie._real_extract('https://3isk.biz/watch/episodes/serie-alpha-season-01-episode-01')
+                # Browser is REUSED: launch_count remains 1
+                self.assertEqual(mock_p.launch_count, 1)
+                self.assertEqual(info1['id'], 'serie-alpha-season-01-episode-01')
+
+                # 3. Episode 2 extraction
+                with patch.object(isk.IskEpisodeIE, '_extract_m3u8_formats', return_value=[{'url': 'https://cdn.example.com/master.m3u8', 'ext': 'mp4'}]):
+                    with patch.object(isk.IskEpisodeIE, '_extract_m3u8_vod_duration', return_value=7500):
+                        info2 = ep_ie._real_extract('https://3isk.biz/watch/episodes/serie-alpha-season-01-episode-02')
+                # Browser is STILL REUSED: launch_count remains 1
+                self.assertEqual(mock_p.launch_count, 1)
+                self.assertEqual(info2['id'], 'serie-alpha-season-01-episode-02')
+            finally:
+                test_pool.close_all()
+                isk._BROWSER_POOL = orig_pool
 
 
 if __name__ == '__main__':

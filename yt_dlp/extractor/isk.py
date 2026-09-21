@@ -1,8 +1,11 @@
+import atexit
+from contextlib import contextmanager
 import fcntl
 import json
 import os
 import re
 import string
+import threading
 import time
 
 from .common import InfoExtractor
@@ -399,6 +402,153 @@ def _evaluate_and_record_duration(
     return is_pending
 
 
+class _BrowserThreadState:
+    def __init__(self):
+        self.playwright = None
+        self.browser = None
+        self.use_count = 0
+        self.lock = threading.RLock()
+
+
+class PlaywrightBrowserPool:
+    """Manages reusable Playwright and Firefox browser instances across extractions.
+
+    Firefox is lazily launched on the first extraction request and kept alive for subsequent
+    extractions. Each extraction receives a pristine, isolated BrowserContext to prevent
+    state/cookie/tab leakage, and contexts are guaranteed to be closed upon extraction completion.
+    Thread-local state ensures safe operation in multi-threaded environments, while an atexit
+    hook guarantees process-level resource cleanup.
+    """
+
+    def __init__(self, headless=True, max_uses=None):
+        self.headless = headless
+        self.max_uses = max_uses
+        self._local = threading.local()
+        self._lock = threading.Lock()
+        self._all_states = []
+        atexit.register(self.close_all)
+
+    def _get_thread_state(self):
+        state = getattr(self._local, 'state', None)
+        if state is None:
+            state = _BrowserThreadState()
+            self._local.state = state
+            with self._lock:
+                self._all_states.append(state)
+        return state
+
+    def _log(self, log_func, msg):
+        if log_func:
+            try:
+                log_func(msg)
+            except Exception:
+                pass
+
+    def get_browser(self, log_func=None):
+        """Retrieve active Firefox browser instance, launching one lazily if needed."""
+        state = self._get_thread_state()
+        with state.lock:
+            if state.browser is not None:
+                try:
+                    if state.browser.is_connected() and (self.max_uses is None or state.use_count < self.max_uses):
+                        self._log(log_func, f'Reusing existing Firefox browser instance (use #{state.use_count + 1})')
+                        return state.browser
+                except Exception:
+                    pass
+                self._close_state(state)
+
+            try:
+                from playwright.sync_api import sync_playwright
+            except ImportError:
+                raise ExtractorError(
+                    'playwright is not installed. Run "pip install playwright && playwright install firefox"',
+                    expected=True,
+                )
+
+            try:
+                if state.playwright is None:
+                    state.playwright = sync_playwright().start()
+                start_time = time.perf_counter()
+                state.browser = state.playwright.firefox.launch(headless=self.headless)
+                duration = time.perf_counter() - start_time
+                state.use_count = 0
+                self._log(log_func, f'Firefox startup time: {duration:.3f} seconds')
+                return state.browser
+            except Exception as e:
+                self._close_state(state)
+                if isinstance(e, ExtractorError):
+                    raise
+                raise ExtractorError(f'Failed to initialize Playwright Firefox browser: {e}', expected=True)
+
+    @contextmanager
+    def borrow_page(self, user_agent=_FIREFOX_USER_AGENT, log_func=None):
+        """Context manager providing an isolated (BrowserContext, Page) pair.
+
+        Guarantees that the context (and its pages) is closed after usage while leaving
+        the browser process alive for subsequent requests. Auto-recovers if browser crashes.
+        """
+        state = self._get_thread_state()
+        browser = self.get_browser(log_func=log_func)
+        context = None
+        page = None
+        try:
+            context = browser.new_context(user_agent=user_agent)
+            page = context.new_page()
+            with state.lock:
+                state.use_count += 1
+            yield context, page
+        finally:
+            if context is not None:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+            with state.lock:
+                if state.browser is not None:
+                    try:
+                        if not state.browser.is_connected():
+                            self._close_state(state)
+                    except Exception:
+                        self._close_state(state)
+
+    def close(self):
+        """Close browser instance for the current thread."""
+        state = getattr(self._local, 'state', None)
+        if state is not None:
+            self._close_state(state)
+
+    def close_all(self):
+        """Close all browser instances across all threads."""
+        try:
+            with self._lock:
+                states = list(self._all_states)
+                self._all_states.clear()
+            for state in states:
+                self._close_state(state)
+        except Exception:
+            pass
+
+    def _close_state(self, state):
+        with state.lock:
+            if state.browser is not None:
+                try:
+                    if state.browser.is_connected():
+                        state.browser.close()
+                except Exception:
+                    pass
+                state.browser = None
+            if state.playwright is not None:
+                try:
+                    state.playwright.stop()
+                except Exception:
+                    pass
+                state.playwright = None
+            state.use_count = 0
+
+
+_BROWSER_POOL = PlaywrightBrowserPool()
+
+
 class IskEpisodeIE(InfoExtractor):
     _VALID_URL = _EPISODE_URL_RE
 
@@ -457,8 +607,8 @@ class IskEpisodeIE(InfoExtractor):
             series=series,
             webpage_url=url,
             m3u8_url=formats[0]['url'] if formats else None,
-            log_func=self.to_screen,
-            warn_func=self.report_warning,
+            log_func=self.to_screen if self._downloader else None,
+            warn_func=self.report_warning if self._downloader else None,
             downloader=self._downloader,
             info_dict=info_dict,
         )
@@ -467,80 +617,71 @@ class IskEpisodeIE(InfoExtractor):
         return info_dict
 
     def _extract_with_playwright(self, url, video_id):
+        result = {'url': None, 'headers': None}
+
+        def _is_target_m3u8(request):
+            return ('.m3u8' in request.url) and ('master.m3u8' in request.url or 'playlist.m3u8' in request.url)
+
+        def handle_request(request):
+            if not result['url'] and _is_target_m3u8(request):
+                result['url'] = request.url
+                result['headers'] = request.headers
+
         try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            raise ExtractorError('playwright is not installed. Run "pip install playwright"', expected=True)
+            log_func = self.write_debug if self._downloader else None
+            with _BROWSER_POOL.borrow_page(user_agent=_FIREFOX_USER_AGENT, log_func=log_func) as (context, page):
+                page.on('request', handle_request)
 
-        with sync_playwright() as p:
-            start_time = time.perf_counter()
-            browser = p.firefox.launch(headless=True)
-            end_time = time.perf_counter()
+                try:
+                    page.goto(url, wait_until='domcontentloaded', timeout=60000)
 
-            startup_duration = end_time - start_time
-            self.write_debug(f'Firefox startup time: {startup_duration:.3f} seconds')
+                    # This listener will automatically close any ad tab that opens
+                    context.on('page', lambda new_page: new_page.close())
 
-            context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
-            page = context.new_page()
+                    watch_link = page.get_by_text(WATCH_LABEL, exact=True)
+                    outer_iframe = page.frame_locator('#iframe_player')
 
-            result = {'url': None, 'headers': None}
+                    attempts = 0
+                    while attempts < 5:
+                        # Click the button
+                        watch_link.click(force=True, timeout=10000)
+                        # Check if the video player (or next element) appeared
+                        try:
+                            outer_iframe.owner.wait_for(timeout=2000)
+                            break
+                        except Exception:
+                            attempts += 1
 
-            def _is_target_m3u8(request):
-                return ('.m3u8' in request.url) and ('master.m3u8' in request.url or 'playlist.m3u8' in request.url)
+                    if attempts == 5:
+                        raise ExtractorError('Failed to click the watch button and load the video player', expected=True)
 
-            def handle_request(request):
-                if not result['url'] and _is_target_m3u8(request):
-                    result['url'] = request.url
-                    result['headers'] = request.headers
+                    # Wait for the inner player iframe to load and initiate stream playback
+                    inner_iframe = outer_iframe.locator('.Video').frame_locator('iframe')
+                    inner_iframe.owner.wait_for(timeout=10000)
 
-            page.on('request', handle_request)
+                    # Wait for m3u8 request event if not already captured
+                    if not result['url']:
+                        try:
+                            req = page.wait_for_event('request', predicate=_is_target_m3u8, timeout=30000)
+                            result['url'] = req.url
+                            result['headers'] = req.headers
+                        except Exception:
+                            pass
 
-            try:
-                page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                except Exception as e:
+                    if isinstance(e, ExtractorError):
+                        raise
+                    self.report_warning(f'Playwright error: {e}')
+                finally:
+                    if not result['url']:
+                        self._error_screenshot(page, video_id)
 
-                # This listener will automatically close any ad tab that opens
-                context.on('page', lambda new_page: new_page.close())
+        except ExtractorError:
+            raise
+        except Exception as e:
+            self.report_warning(f'Playwright error: {e}')
 
-                watch_link = page.get_by_text(WATCH_LABEL, exact=True)
-                outer_iframe = page.frame_locator('#iframe_player')
-
-                attempts = 0
-                while attempts < 5:
-                    # Click the button
-                    watch_link.click(force=True, timeout=10000)
-                    # Check if the video player (or next element) appeared
-                    try:
-                        outer_iframe.owner.wait_for(timeout=2000)
-                        break
-                    except Exception:
-                        attempts += 1
-
-                if attempts == 5:
-                    raise ExtractorError('Failed to click the watch button and load the video player', expected=True)
-
-                # Wait for the inner player iframe to load and initiate stream playback
-                inner_iframe = outer_iframe.locator('.Video').frame_locator('iframe')
-                inner_iframe.owner.wait_for(timeout=10000)
-
-                # Wait for m3u8 request event if not already captured
-                if not result['url']:
-                    try:
-                        req = page.wait_for_event('request', predicate=_is_target_m3u8, timeout=30000)
-                        result['url'] = req.url
-                        result['headers'] = req.headers
-                    except Exception:
-                        pass
-
-            except Exception as e:
-                if isinstance(e, ExtractorError):
-                    raise
-                self.report_warning(f'Playwright error: {e}')
-            finally:
-                if not result['url']:
-                    self._error_screenshot(page, video_id)
-                browser.close()
-
-            return result
+        return result
 
     def _error_screenshot(self, page, video_id):
         file_path = f'{DOWNLOADS_PATH}/errors/{video_id}.png'
@@ -556,43 +697,37 @@ class IskHomeIE(InfoExtractor):
         _cleanup_state_and_logs(downloader=self._downloader)
 
         try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            raise ExtractorError('playwright is not installed. Run "pip install playwright && playwright install firefox"', expected=True)
+            log_func = self.write_debug if self._downloader else None
+            with _BROWSER_POOL.borrow_page(user_agent=_FIREFOX_USER_AGENT, log_func=log_func) as (context, page):
+                try:
+                    page.goto(url, wait_until='load', timeout=60000)
 
-        with sync_playwright() as p:
-            start_time = time.perf_counter()
-            browser = p.firefox.launch(headless=True)
-            end_time = time.perf_counter()
+                    episode_links = page.locator('.items-latest-eps a')
 
-            startup_duration = end_time - start_time
-            self.write_debug(f'Firefox startup time: {startup_duration:.3f} seconds')
+                    entries = []
+                    for link in episode_links.all():
+                        href = link.get_attribute('href')
+                        try:
+                            video_info = self.url_result(href, ie=IskEpisodeIE, video_id=re.match(_EPISODE_URL_RE, href).group('id'))
+                            entries.append(video_info)
+                        except Exception as e:
+                            self.report_warning(f'Failed to process episode link {href}: {e}')
 
-            context = browser.new_context(user_agent=_FIREFOX_USER_AGENT)
-            page = context.new_page()
+                    # Reverse the order so we download older videos first.
+                    return self.playlist_result(entries[::-1], playlist_id='3isk:home')
 
-            try:
-                page.goto(url, wait_until='load', timeout=60000)
-
-                episode_links = page.locator('.items-latest-eps a')
-
-                entries = []
-                for link in episode_links.all():
-                    href = link.get_attribute('href')
+                except Exception as e:
+                    if isinstance(e, ExtractorError):
+                        raise
+                    self.report_warning(f'Playwright error: {e}')
+                finally:
+                    file_path = f'{DOWNLOADS_PATH}/home.latest.png'
                     try:
-                        video_info = self.url_result(href, ie=IskEpisodeIE, video_id=re.match(_EPISODE_URL_RE, href).group('id'))
-                        entries.append(video_info)
+                        page.screenshot(path=file_path, full_page=True)
                     except Exception as e:
-                        self.report_warning(f'Failed to process episode link {href}: {e}')
+                        self.report_warning(f'Failed to take home screenshot: {e}')
 
-                # Reverse the order so we download older videos first.
-                return self.playlist_result(entries[::-1], playlist_id='3isk:home')
-
-            except Exception as e:
-                if isinstance(e, ExtractorError):
-                    raise
-                self.report_warning(f'Playwright error: {e}')
-            finally:
-                file_path = f'{DOWNLOADS_PATH}/home.latest.png'
-                page.screenshot(path=file_path, full_page=True)
-                browser.close()
+        except ExtractorError:
+            raise
+        except Exception as e:
+            self.report_warning(f'Playwright error: {e}')
